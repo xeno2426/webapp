@@ -74,6 +74,19 @@ def secure_random_filename(original, prefix=""):
 
 # ---------- SMALL HELPERS ----------
 
+def time_ago(ts_str):
+    try:
+        dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+        diff = datetime.now() - dt
+        s = int(diff.total_seconds())
+        if s < 60: return "just now"
+        if s < 3600: return f"{s//60}m ago"
+        if s < 86400: return f"{s//3600}h ago"
+        return dt.strftime("%b %d")
+    except Exception:
+        return ts_str
+
+
 def load_json(path, default):
     if not os.path.exists(path):
         return default
@@ -396,9 +409,10 @@ a.link:hover{
   border-radius:14px;
   border:1px solid #1f2937;
   background:rgba(15,23,42,0.96);
-  max-height:260px;
+  max-height:60vh;
   overflow-y:auto;
   padding:8px;
+  scroll-behavior:smooth;
 }
 .msg-row{
   display:flex;
@@ -935,7 +949,7 @@ document.addEventListener('DOMContentLoaded', function(){
     return banner;
   }
 
-  function updateBanner(count){
+  function updateBanner(count, senders){
     var b = ensureBanner();
     var textEl = b.querySelector('#notifText');
     if (!textEl) return;
@@ -945,9 +959,16 @@ document.addEventListener('DOMContentLoaded', function(){
       return;
     }
 
+    var who = '';
+    if (senders && senders.length > 0){
+      var names = senders.slice(0,2).map(function(s){ return '@'+s; }).join(', ');
+      if (senders.length > 2) names += ' +' + (senders.length-2) + ' more';
+      who = ' from ' + names;
+    }
+
     var msg = (count === 1)
-      ? 'You have 1 new message'
-      : 'You have ' + count + ' new messages';
+      ? '1 new message' + who
+      : count + ' new messages' + who;
 
     textEl.textContent = msg;
     b.style.display = 'flex';
@@ -958,16 +979,23 @@ document.addEventListener('DOMContentLoaded', function(){
       .then(function(r){ return r.json(); })
       .then(function(data){
         if (!data || !data.ok) return;
-        updateBanner(data.unread || 0);
+        updateBanner(data.unread || 0, data.senders || []);
       })
       .catch(function(e){
         // ignore network errors silently
       });
   }
 
+  // ping server to keep online status fresh
+  function pingOnline(){
+    fetch('/ping', {method:'POST'}).catch(function(){});
+  }
+
   // first check + poll every 5 seconds
   pollUnread();
   setInterval(pollUnread, 5000);
+  pingOnline();
+  setInterval(pingOnline, 20000);
 });
 </script>
 </body>
@@ -1018,15 +1046,19 @@ def unread_json():
     info = users.get(me, {})
     unread_map = info.get("unread", {}) or {}
     total = 0
+    senders = []
 
     if isinstance(unread_map, dict):
-        for v in unread_map.values():
+        for sender, v in unread_map.items():
             try:
-                total += int(v)
+                count = int(v)
+                if count > 0:
+                    total += count
+                    senders.append(sender)
             except Exception:
                 pass
 
-    return jsonify(ok=True, unread=total)
+    return jsonify(ok=True, unread=total, senders=senders)
 
 # ---------- AUTH ROUTES ----------
 
@@ -1203,17 +1235,23 @@ def home():
             save_notes(user, notes)
         return redirect("/")
 
+    sort = request.args.get("sort", "newest")
     notes = load_notes(user)
+    if sort == "oldest":
+        notes_sorted = list(enumerate(notes))[::-1]
+    else:
+        notes_sorted = list(enumerate(notes))
+
     notes_html = ""
-    for i, n in enumerate(notes):
+    for i, n in notes_sorted:
         title = html.escape(n.get("title", "Untitled"))
         body = html.escape(n.get("body", ""))
-        t = html.escape(n.get("time", ""))
+        t = time_ago(n.get("time", ""))
         notes_html += f"""
-<div class="note-card">
+<div class="note-card" data-title="{html.escape(n.get('title','').lower())}" data-body="{html.escape(n.get('body','').lower())}">
   <div class="note-title">{title}</div>
   <div class="note-time">{t}</div>
-  <div class="note-body">{body}</div>
+  <div class="note-body" style="white-space:pre-wrap;">{body}</div>
   <div class="note-actions">
     <form method="get" action="/note/{i}">
       <button class="btn-small outline" type="submit">Edit</button>
@@ -1225,18 +1263,46 @@ def home():
 </div>
 """
 
+    sort_active_new = "active" if sort == "newest" else ""
+    sort_active_old = "active" if sort == "oldest" else ""
+
     content = f"""
 <h1>Home</h1>
-<p>Add quick note or manage your saved notes.</p>
+<p>Quick notes and reminders.</p>
 
 <form method="post">
-  <textarea name="quick" placeholder="Quick note..."></textarea>
-  <button class="btn" type="submit">Save to notes</button>
+  <textarea name="quick" placeholder="Quick note..." maxlength="2000"
+    oninput="document.getElementById('qcount').textContent=this.value.length+'/2000'"></textarea>
+  <p style="font-size:11px;color:#64748b;text-align:right;margin-top:-8px;" id="qcount">0/2000</p>
+  <button class="btn" type="submit">Save note</button>
 </form>
 
-<p style="margin-top:14px;font-weight:500;">Saved notes</p>
-<p><a href="/note/new" class="link">Add new full note</a></p>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;">
+  <p style="font-weight:500;margin:0;">Saved notes ({len(notes)})</p>
+  <div style="display:flex;gap:6px;align-items:center;">
+    <a href="/?sort=newest" class="btn-small {'outline' if sort!='newest' else ''}" style="font-size:11px;">Newest</a>
+    <a href="/?sort=oldest" class="btn-small {'outline' if sort!='oldest' else ''}" style="font-size:11px;">Oldest</a>
+  </div>
+</div>
+
+<p><a href="/note/new" class="link">+ New full note</a></p>
+
+<input id="noteSearch" placeholder="Search notes..." oninput="filterNotes(this.value)"
+  style="margin-bottom:8px;">
+
+<div id="notesList">
 {notes_html if notes_html else "<p style='font-size:13px;color:#64748b;'>No notes yet.</p>"}
+</div>
+
+<script>
+function filterNotes(q){{
+  q = q.toLowerCase();
+  document.querySelectorAll('#notesList .note-card').forEach(function(c){{
+    var t = (c.getAttribute('data-title')||'') + ' ' + (c.getAttribute('data-body')||'');
+    c.style.display = t.includes(q) ? '' : 'none';
+  }});
+}}
+</script>
 """
     return render(content, active="home", user=user)
 
@@ -1342,18 +1408,21 @@ def profile():
 
     if request.method == "POST":
         action = request.form.get("action")
+
         if action == "update_bio":
             bio = request.form.get("bio", "")[:400]
             info["bio"] = bio
             users[user] = info
             save_users(users)
             info_msg = "Bio updated."
+
         elif action == "update_recovery":
             rec = request.form.get("recovery", "").strip()
             info["recovery"] = rec
             users[user] = info
             save_users(users)
             info_msg = "Recovery phrase updated."
+
         elif action == "change_password":
             old = request.form.get("old_pw", "")
             new1 = request.form.get("new_pw", "")
@@ -1361,23 +1430,52 @@ def profile():
             if info.get("password_hash") != hash_pw(old):
                 error = "Old password incorrect."
             elif new1 != new2 or len(new1) < 4:
-                error = "New passwords invalid."
+                error = "New passwords don't match or are too short."
             else:
                 info["password_hash"] = hash_pw(new1)
                 users[user] = info
                 save_users(users)
                 info_msg = "Password changed."
+
         elif action == "avatar":
             file = request.files.get("avatar")
             if file and file.filename:
-                filename = secure_filename(file.filename)
-                updir = user_upload_dir(user)
-                path = os.path.join(updir, filename)
-                file.save(path)
-                info["avatar"] = filename
-                users[user] = info
+                allowed = {"png", "jpg", "jpeg", "gif", "webp"}
+                ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+                file.seek(0, 2)
+                size = file.tell()
+                file.seek(0)
+                if ext not in allowed:
+                    error = "Only PNG, JPG, GIF, WEBP images allowed."
+                elif size > 5 * 1024 * 1024:
+                    error = "Image must be under 5MB."
+                else:
+                    filename = secure_filename(file.filename)
+                    updir = user_upload_dir(user)
+                    path = os.path.join(updir, filename)
+                    file.save(path)
+                    info["avatar"] = filename
+                    users[user] = info
+                    save_users(users)
+                    info_msg = "Avatar updated."
+
+        elif action == "delete_account":
+            confirm = request.form.get("confirm_delete", "").strip()
+            if confirm != user:
+                error = "Type your username exactly to confirm deletion."
+            else:
+                # remove from friends lists
+                for uname, uinfo in users.items():
+                    if uname == user:
+                        continue
+                    uinfo["friends"] = [f for f in uinfo.get("friends", []) if f != user]
+                    uinfo.get("friend_requests", [])
+                    if user in uinfo.get("friend_requests", []):
+                        uinfo["friend_requests"].remove(user)
+                users.pop(user, None)
                 save_users(users)
-                info_msg = "Avatar updated."
+                session.clear()
+                return redirect("/login")
 
     avatar_url = ""
     if info.get("avatar"):
@@ -1385,6 +1483,7 @@ def profile():
 
     bio_val = html.escape(info.get("bio", ""))
     rec_val = html.escape(info.get("recovery", ""))
+    bio_len = len(info.get("bio", ""))
 
     block = ""
     if error:
@@ -1399,15 +1498,19 @@ def profile():
 <p>Manage your profile, avatar and security.</p>
 {block}
 {avatar_html}
+
 <form method="post" enctype="multipart/form-data">
   <input type="hidden" name="action" value="avatar">
-  <input type="file" name="avatar" accept="image/*">
+  <input type="file" name="avatar" accept="image/png,image/jpeg,image/gif,image/webp">
+  <p style="font-size:11px;color:#64748b;margin-top:-6px;">PNG/JPG/GIF/WEBP · max 5MB</p>
   <button class="btn2" type="submit">Upload avatar</button>
 </form>
 
 <form method="post" style="margin-top:12px;">
   <input type="hidden" name="action" value="update_bio">
-  <textarea name="bio" placeholder="Your bio...">{bio_val}</textarea>
+  <textarea name="bio" placeholder="Your bio..." maxlength="400"
+    oninput="document.getElementById('bioCount').textContent=this.value.length+'/400'">{bio_val}</textarea>
+  <p style="font-size:11px;color:#64748b;text-align:right;margin-top:-8px;" id="bioCount">{bio_len}/400</p>
   <button class="btn2" type="submit">Save bio</button>
 </form>
 
@@ -1423,6 +1526,15 @@ def profile():
   <input name="new_pw" type="password" placeholder="New password" required>
   <input name="new_pw2" type="password" placeholder="Confirm new password" required>
   <button class="btn2" type="submit">Change password</button>
+</form>
+
+<hr style="border-color:#1f2937;margin:18px 0;">
+<p style="font-size:13px;font-weight:600;color:#ef4444;">Danger Zone</p>
+<p style="font-size:12px;color:#64748b;">This permanently deletes your account, messages and data.</p>
+<form method="post" onsubmit="return confirm('Are you absolutely sure? This cannot be undone.');">
+  <input type="hidden" name="action" value="delete_account">
+  <input name="confirm_delete" placeholder="Type your username to confirm">
+  <button class="btn2" type="submit" style="color:#ef4444;border-color:#ef4444;margin-top:6px;">Delete my account</button>
 </form>
 """
     return render(content, active="profile", user=user)
@@ -1487,25 +1599,53 @@ def friends():
                 error = "Invalid username."
             elif friend_name not in users:
                 error = "User not found."
+            elif friend_name in info.get("friends", []):
+                error = "Already friends."
+            elif me in users[friend_name].get("friend_requests", []):
+                error = "Request already sent."
             else:
+                # send friend request
+                other = users.get(friend_name, {})
+                reqs = other.get("friend_requests", [])
+                if me not in reqs:
+                    reqs.append(me)
+                other["friend_requests"] = reqs
+                users[friend_name] = other
+                save_users(users)
+                info = users[me]
+                info_msg = f"Friend request sent to @{friend_name}."
+
+        elif action == "accept":
+            requester = request.form.get("requester", "").strip()
+            reqs = info.get("friend_requests", [])
+            if requester in reqs:
+                reqs.remove(requester)
+                info["friend_requests"] = reqs
                 my_friends = set(info.get("friends", []))
-                if friend_name in my_friends:
-                    error = "Already friends."
-                else:
-                    # add both ways
-                    my_friends.add(friend_name)
-                    info["friends"] = list(my_friends)
-                    users[me] = info
+                my_friends.add(requester)
+                info["friends"] = list(my_friends)
+                users[me] = info
 
-                    other = users.get(friend_name, {})
-                    other_friends = set(other.get("friends", []))
-                    other_friends.add(me)
-                    other["friends"] = list(other_friends)
-                    users[friend_name] = other
+                other = users.get(requester, {})
+                other_friends = set(other.get("friends", []))
+                other_friends.add(me)
+                other["friends"] = list(other_friends)
+                users[requester] = other
 
-                    save_users(users)
-                    info = users[me]
-                    info_msg = f"You are now friends with @{friend_name}."
+                save_users(users)
+                info = users[me]
+                info_msg = f"You are now friends with @{requester}."
+
+        elif action == "decline":
+            requester = request.form.get("requester", "").strip()
+            reqs = info.get("friend_requests", [])
+            if requester in reqs:
+                reqs.remove(requester)
+                info["friend_requests"] = reqs
+                users[me] = info
+                save_users(users)
+                info = users[me]
+                info_msg = f"Declined request from @{requester}."
 
         elif action == "remove":
             if friend_name in info.get("friends", []):
@@ -1518,6 +1658,30 @@ def friends():
 
                 save_users(users)
                 info_msg = f"Removed @{friend_name} from friends."
+
+    # --- pending requests ---
+    pending = info.get("friend_requests", [])
+    requests_html = ""
+    if pending:
+        requests_html = "<p style='font-weight:600;margin-top:14px;'>Friend Requests</p>"
+        for req in pending:
+            requests_html += f"""
+<div class="friend-card">
+  <div><strong>@{html.escape(req)}</strong> wants to be friends</div>
+  <div style="display:flex;gap:6px;">
+    <form method="post" style="display:inline;">
+      <input type="hidden" name="action" value="accept">
+      <input type="hidden" name="requester" value="{html.escape(req)}">
+      <button class="btn-small" type="submit">Accept</button>
+    </form>
+    <form method="post" style="display:inline;">
+      <input type="hidden" name="action" value="decline">
+      <input type="hidden" name="requester" value="{html.escape(req)}">
+      <button class="btn-small outline" type="submit">Decline</button>
+    </form>
+  </div>
+</div>
+"""
 
     friends_list = info.get("friends", [])
     friends_html = ""
@@ -1539,10 +1703,11 @@ def friends():
             unread = info.get("unread", {}).get(f, 0)
             badge = f"<small> · {unread} new</small>" if unread else ""
             status_color = "#22c55e" if online else "#4b5563"
+            status_label = "online" if online else "offline"
             friends_html += f"""
-<div class="friend-card">
+<div class="friend-card" data-name="{html.escape(f.lower())}">
   <div>
-    <span style="display:inline-block;width:8px;height:8px;border-radius:999px;background:{status_color};margin-right:6px;"></span>
+    <span style="display:inline-block;width:8px;height:8px;border-radius:999px;background:{status_color};margin-right:6px;" title="{status_label}"></span>
     <strong>@{html.escape(f)}</strong>{badge}
   </div>
   <div>
@@ -1573,9 +1738,27 @@ def friends():
 {block}
 <form method="post">
   <input name="friend_username" placeholder="Add friend by username">
-  <button class="btn" type="submit">Add friend</button>
+  <button class="btn" type="submit">Send Request</button>
 </form>
-{friends_html}
+
+{requests_html}
+
+<p style="font-weight:600;margin-top:14px;">Your Friends ({len(friends_list)})</p>
+<input id="friendSearch" oninput="filterFriends(this.value)" placeholder="Search friends..." style="margin-bottom:8px;">
+<div id="friendsList">
+{friends_html if friends_html else "<p style='font-size:13px;color:#64748b;'>No friends yet.</p>"}
+</div>
+
+<script>
+function filterFriends(q){{
+  var cards = document.querySelectorAll('#friendsList .friend-card');
+  q = q.toLowerCase();
+  cards.forEach(function(c){{
+    var name = c.getAttribute('data-name') || '';
+    c.style.display = name.includes(q) ? '' : 'none';
+  }});
+}}
+</script>
 """
     return render(content, active="friends", user=me)
 
@@ -1731,7 +1914,7 @@ def chat(friend):
         if msg.get("deleted"):
             text_raw = "This message was deleted"
         text = html.escape(text_raw)
-        time_html = html.escape(msg.get("time", ""))
+        time_html = time_ago(msg.get("time", ""))
         ftype = msg.get("ftype", "text")
         filename = msg.get("filename", "") or ""
         url = msg.get("url", "")
@@ -1751,7 +1934,7 @@ def chat(friend):
         reply_index = msg.get("reply_to")
         if isinstance(reply_index, int) and 0 <= reply_index < len(chat_data):
             rmsg = chat_data[reply_index]
-            rtext_raw = rmsg.get("text") or "[attachment]"
+            rtext_raw = decrypt_text(rmsg.get("text") or "") or "[attachment]"
             rtext = html.escape(rtext_raw[:40])
             rauthor = html.escape(rmsg.get("from", ""))
             reply_html = f'''
@@ -1846,7 +2029,7 @@ def chat(friend):
     reply_index = session.get(reply_key)
     if isinstance(reply_index, int) and 0 <= reply_index < len(chat_data):
         rmsg = chat_data[reply_index]
-        rtext_raw = rmsg.get("text") or "[attachment]"
+        rtext_raw = decrypt_text(rmsg.get("text") or "") or "[attachment]"
         rtext = html.escape(rtext_raw[:60])
         rauthor = html.escape(rmsg.get("from", ""))
         reply_info_html = f"""
@@ -1887,6 +2070,21 @@ def chat(friend):
     # script: auto-refresh + typing + TAP-TO-REACT
     script = """
 <script>
+  // Auto-scroll to latest message on load
+  var chatBox = document.querySelector('.chat-box');
+  if(chatBox) chatBox.scrollTop = chatBox.scrollHeight;
+
+  // Enter key to send
+  var msgInput = document.querySelector('input[name="message"]');
+  if(msgInput){
+    msgInput.addEventListener('keydown', function(e){
+      if(e.key === 'Enter' && !e.shiftKey){
+        e.preventDefault();
+        msgInput.closest('form').submit();
+      }
+    });
+  }
+
   // Auto-refresh only the chat messages every 2 seconds
   setInterval(function(){
     fetch(window.location.href)
@@ -2073,6 +2271,18 @@ def typing(friend):
     save_users(users)
     return ("", 204)
 
+@app.route("/ping", methods=["POST"])
+def ping():
+    me = current_user()
+    if not me:
+        return ("", 401)
+    users = load_users()
+    info = users.get(me, {})
+    info["last_seen"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    users[me] = info
+    save_users(users)
+    return ("", 204)
+
 @app.route("/stories", methods=["GET", "POST"])
 def stories_page():
     me = current_user()
@@ -2167,6 +2377,7 @@ def stories_page():
 
             stories.setdefault(me, []).append(story_obj)
             save_stories(stories)
+            session["story_posted"] = "Story posted successfully!"
             return redirect("/stories")
 
     # -------- group stories per user & sort by time --------
@@ -2335,7 +2546,7 @@ def stories_page():
 </div>
 """
 
-    # -------- JS: progress bar + auto-advance + controls + delete modal --------
+    # -------- JS: progress bar + auto-advance + swipe + video + delete modal --------
     script = """
 <script>
 document.addEventListener('DOMContentLoaded', function(){
@@ -2347,14 +2558,35 @@ document.addEventListener('DOMContentLoaded', function(){
   var prevUrl = overlay.getAttribute('data-prev') || '/stories';
   var exitUrl = overlay.getAttribute('data-exit') || '/stories';
 
-  var duration = 15000; // 15 seconds
+  var video = overlay.querySelector('video');
+  var duration = video ? null : 15000; // video drives its own timing
   var elapsed = 0;
   var last = Date.now();
   var paused = false;
   var finished = false;
 
+  // For video stories: sync progress bar to video duration
+  if (video){
+    video.addEventListener('loadedmetadata', function(){
+      duration = video.duration * 1000;
+    });
+    video.addEventListener('ended', function(){
+      finished = true;
+      setTimeout(function(){ window.location.href = nextUrl; }, 300);
+    });
+    video.addEventListener('pause', function(){ paused = true; });
+    video.addEventListener('play',  function(){
+      if (!finished){ paused = false; last = Date.now(); }
+    });
+    video.addEventListener('timeupdate', function(){
+      if (!duration || !video.duration) return;
+      var t = video.currentTime / video.duration;
+      bar.style.width = (t * 100) + '%';
+    });
+  }
+
   function step(){
-    if (finished) return;
+    if (finished || video) return; // video handles its own bar
     if (!paused){
       var now = Date.now();
       elapsed += (now - last);
@@ -2362,58 +2594,65 @@ document.addEventListener('DOMContentLoaded', function(){
       var t = elapsed / duration;
       if (t > 1) t = 1;
       bar.style.width = (t * 100) + '%';
-
       if (t >= 1){
         finished = true;
-        setTimeout(function(){
-          window.location.href = nextUrl;
-        }, 300);
+        setTimeout(function(){ window.location.href = nextUrl; }, 300);
         return;
       }
     }
     requestAnimationFrame(step);
   }
-  requestAnimationFrame(step);
+  if (!video) requestAnimationFrame(step);
 
   function goNext(){ window.location.href = nextUrl; }
   function goPrev(){ window.location.href = prevUrl; }
   function goExit(){ window.location.href = exitUrl; }
 
-  // tap zones: left = prev, right = next, outside = exit
+  // ---- Swipe support (mobile) ----
+  var touchStartX = 0;
+  var touchStartY = 0;
+  overlay.addEventListener('touchstart', function(e){
+    touchStartX = e.changedTouches[0].screenX;
+    touchStartY = e.changedTouches[0].screenY;
+    paused = true;
+  }, {passive:true});
+
+  overlay.addEventListener('touchend', function(e){
+    var dx = e.changedTouches[0].screenX - touchStartX;
+    var dy = e.changedTouches[0].screenY - touchStartY;
+    paused = false;
+    last = Date.now();
+
+    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 40){
+      // horizontal swipe
+      if (dx < 0) goNext();
+      else goPrev();
+    }
+  }, {passive:true});
+
+  // ---- Tap zones (desktop): left half = prev, right half = next ----
   overlay.addEventListener('click', function(e){
+    // don't navigate if tapping delete box or its buttons
+    if (e.target.closest('#storyDeleteBox')) return;
+    if (e.target.closest('.story-delete-wrap')) return;
     if (!e.target.closest('.story-viewer')){
       goExit();
       return;
     }
-    var x = e.clientX || (e.touches && e.touches[0] && e.touches[0].clientX);
+    var x = e.clientX;
     var mid = window.innerWidth / 2;
-    if (x > mid){
-      goNext();
-    } else {
-      goPrev();
-    }
+    if (x > mid) goNext();
+    else goPrev();
   });
 
-  // hold to pause
+  // ---- Hold to pause (mouse) ----
   function startPause(){ paused = true; }
-  function endPause(){
-    if (!finished){
-      paused = false;
-      last = Date.now();
-    }
-  }
-
+  function endPause(){ if(!finished){ paused = false; last = Date.now(); } }
   overlay.addEventListener('mousedown', startPause);
-  overlay.addEventListener('mouseup', endPause);
-  overlay.addEventListener('mouseleave', endPause);
+  overlay.addEventListener('mouseup',   endPause);
+  overlay.addEventListener('mouseleave',endPause);
 
-  overlay.addEventListener('touchstart', function(e){ startPause(); }, {passive:true});
-  overlay.addEventListener('touchend', function(e){ endPause(); }, {passive:true});
-
-  // block long-press context menu
-  overlay.addEventListener('contextmenu', function(e){
-    e.preventDefault();
-  });
+  overlay.addEventListener('contextmenu', function(e){ e.preventDefault(); });
 });
 
 // delete modal helpers
@@ -2432,14 +2671,18 @@ function closeStoryDelete(){
     if error:
         error_html = "<p style='color:#f97373;font-size:13px;margin-top:6px;'>" + html.escape(error) + "</p>"
 
+    posted_msg = session.pop("story_posted", "")
+    posted_html = f'<div class="info">{html.escape(posted_msg)}</div>' if posted_msg else ""
+
     content = f"""
 <h1>Stories</h1>
 <p>Share images or videos that disappear after <strong>16 hours</strong>.</p>
 {error_html}
+{posted_html}
 
 <h2>Create story</h2>
 <form method="post" enctype="multipart/form-data" class="chat-input-row">
-  <input name="caption" placeholder="Say something about your story...">
+  <input name="caption" placeholder="Say something about your story... (optional)">
   <div style="margin-top:8px;">
     <input type="file" name="file" required>
   </div>
@@ -2713,7 +2956,7 @@ def group_chat(group_id):
         if msg.get("deleted"):
             text_raw = "This message was deleted"
         text = html.escape(text_raw)
-        time_html = html.escape(msg.get("time", ""))
+        time_html = time_ago(msg.get("time", ""))
         ftype = msg.get("ftype", "text")
         filename = msg.get("filename", "") or ""
         url = msg.get("url", "")
@@ -2726,7 +2969,7 @@ def group_chat(group_id):
         reply_index = msg.get("reply_to")
         if isinstance(reply_index, int) and 0 <= reply_index < len(chat_data):
             rmsg = chat_data[reply_index]
-            rtext_raw = rmsg.get("text") or "[attachment]"
+            rtext_raw = decrypt_text(rmsg.get("text") or "") or "[attachment]"
             rtext = html.escape(rtext_raw[:40])
             rauthor = html.escape(rmsg.get("from", ""))
             reply_html = f'''
@@ -2874,7 +3117,7 @@ def group_chat(group_id):
     reply_index = session.get(reply_key)
     if isinstance(reply_index, int) and 0 <= reply_index < len(chat_data):
         rmsg = chat_data[reply_index]
-        rtext_raw = rmsg.get("text") or "[attachment]"
+        rtext_raw = decrypt_text(rmsg.get("text") or "") or "[attachment]"
         rtext = html.escape(rtext_raw[:60])
         rauthor = html.escape(rmsg.get("from", ""))
         reply_info_html = f"""
@@ -2896,6 +3139,21 @@ def group_chat(group_id):
     # JS just for auto-refresh, typing, tap-to-react, swipe-to-reply
     script = """
 <script>
+  // Auto-scroll to latest message on load
+  var chatBox = document.querySelector('.chat-box');
+  if(chatBox) chatBox.scrollTop = chatBox.scrollHeight;
+
+  // Enter key to send
+  var msgInput = document.querySelector('input[name="message"]');
+  if(msgInput){
+    msgInput.addEventListener('keydown', function(e){
+      if(e.key === 'Enter' && !e.shiftKey){
+        e.preventDefault();
+        msgInput.closest('form').submit();
+      }
+    });
+  }
+
   // Auto-refresh only the chat messages every 2 seconds
   setInterval(function(){
     fetch(window.location.href)
