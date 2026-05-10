@@ -8,7 +8,7 @@ from flask import (
     url_for,
 )
 from datetime import datetime, timedelta
-import os, json, hashlib, html
+import os, json, hashlib, html, time
 from werkzeug.utils import secure_filename
 from cryptography.fernet import Fernet
 import base64
@@ -26,16 +26,45 @@ os.makedirs(UPLOADS_ROOT, exist_ok=True)
 
 USERS_FILE = os.path.join(DATA_DIR, "users.json")
 
-ADMIN_KEY = "XENO-ADMIN-2426"
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "XENO-ADMIN-2426")
 
 # ---------- FLASK APP ----------
 
 app = Flask(__name__)
-app.secret_key = "CHANGE_THIS_SECRET_KEY"   # change for production
+app.secret_key = os.environ.get("SECRET_KEY", "CHANGE_THIS_SECRET_KEY")
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
+
+# -------- RATE LIMITER (in-memory) --------
+_login_attempts: dict = {}   # { ip: {"fails": N, "locked_until": float} }
+MAX_FAILS   = 5
+LOCKOUT_SEC = 900  # 15 minutes
+
+def _client_ip() -> str:
+    return request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
+
+def _is_locked(ip: str) -> tuple:
+    """Returns (locked: bool, seconds_left: int)."""
+    e = _login_attempts.get(ip)
+    if not e or e["fails"] < MAX_FAILS:
+        return False, 0
+    left = int(e["locked_until"] - time.time())
+    if left > 0:
+        return True, left
+    _login_attempts.pop(ip, None)
+    return False, 0
+
+def _record_fail(ip: str):
+    e = _login_attempts.setdefault(ip, {"fails": 0, "locked_until": 0.0})
+    e["fails"] += 1
+    if e["fails"] >= MAX_FAILS:
+        e["locked_until"] = time.time() + LOCKOUT_SEC
+
+def _reset_fails(ip: str):
+    _login_attempts.pop(ip, None)
 
 # -------- CHAT ENCRYPTION --------
 
-SECRET_MASTER_KEY = "MY_SUPER_SECRET_KEY_123"  # you can change this
+SECRET_MASTER_KEY = os.environ.get("MASTER_KEY", "MY_SUPER_SECRET_KEY_123")
 
 def get_cipher():
     key = hashlib.sha256(SECRET_MASTER_KEY.encode()).digest()
@@ -208,7 +237,7 @@ HTML = """
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Xeno's WebApp</title>
+<title>{TITLE}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 *{box-sizing:border-box}
@@ -450,6 +479,11 @@ a.link:hover{
 }
 .chat-input-row{
   margin-top:10px;
+  position:sticky;
+  bottom:0;
+  background:#020617;
+  padding-bottom:env(safe-area-inset-bottom, 8px);
+  z-index:10;
 }
 .chat-input-row input[type=file]{
   background:#020617;
@@ -810,6 +844,7 @@ a.link:hover{
   vertical-align:middle;
 }
 /* In-site notification banner */
+@keyframes spin{to{transform:rotate(360deg);}}
 .notif-banner{
   position:fixed;
   top:12px;
@@ -936,6 +971,35 @@ document.addEventListener("DOMContentLoaded", function(){
 });
 </script>
 <script>
+// ---- Anti double-submit + loading spinner ----
+// Usage: <form onsubmit="submitOnce(this)">
+// Any .btn or .btn2 inside the form becomes disabled with spinner text.
+function submitOnce(form){
+  var btns = form.querySelectorAll('button[type="submit"], button:not([type="button"])');
+  btns.forEach(function(b){
+    b.disabled = true;
+    b._orig = b.innerHTML;
+    b.innerHTML = '<span style="display:inline-block;width:12px;height:12px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:4px;"></span>Loading...';
+  });
+  // Re-enable after 8 seconds as a safety net
+  setTimeout(function(){
+    btns.forEach(function(b){
+      b.disabled = false;
+      if(b._orig) b.innerHTML = b._orig;
+    });
+  }, 8000);
+}
+
+// Attach submitOnce to all forms that don't already have onsubmit
+document.addEventListener('DOMContentLoaded', function(){
+  document.querySelectorAll('form[method="post"]').forEach(function(form){
+    if(!form.getAttribute('onsubmit')){
+      form.addEventListener('submit', function(){ submitOnce(form); });
+    }
+  });
+});
+</script>
+<script>
 document.addEventListener('DOMContentLoaded', function(){
   var banner = null;
 
@@ -1026,14 +1090,26 @@ def nav_html(active: str, user: str | None):
     )
 
 
-def render(content: str, active: str = "", user: str | None = None):
+PAGE_TITLES = {
+    "home":    "Home",
+    "friends": "Friends",
+    "stories": "Stories",
+    "groups":  "Groups",
+    "profile": "Profile",
+    "":        "Xeno WebApp",
+}
+
+def render(content: str, active: str = "", user: str | None = None, title: str = ""):
     if user:
         top = f'<div class="top"><span>@{html.escape(user)}</span><a href="/logout">Logout</a></div>'
     else:
         top = '<div class="top"><span>Xeno WebApp</span><a href="/login">Login</a></div>'
+    page_title = title or PAGE_TITLES.get(active, "Xeno WebApp")
+    full_title = f"{page_title} · Xeno WebApp" if active else page_title
     page = HTML.replace("{TOP}", top)
     page = page.replace("{NAV}", nav_html(active, user))
     page = page.replace("{CONTENT}", content)
+    page = page.replace("{TITLE}", html.escape(full_title))
     return page
 #---------- in-site notfication--------
 @app.route("/unread.json")
@@ -1114,7 +1190,7 @@ def signup():
   <button class="btn2" type="submit">Back to login</button>
 </form>
 """
-    return render(content, active="", user=None)
+    return render(content, active="", user=None, title="Sign Up")
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -1124,26 +1200,45 @@ def login():
 
     users = load_users()
     error = ""
-    if request.method == "POST":
-        u = request.form.get("username", "").strip()
-        p = request.form.get("password", "")
-        info = users.get(u)
-        if not info:
-            error = "User not found."
-        elif info.get("password_hash") != hash_pw(p):
-            error = "Wrong password."
-        else:
-            session["user"] = u
-            return redirect("/")
+    ip = _client_ip()
 
-    msg = f'<div class="error">{html.escape(error)}</div>' if error else ""
+    if request.method == "POST":
+        locked, left = _is_locked(ip)
+        if locked:
+            mins = left // 60
+            secs = left % 60
+            error = f"Too many failed attempts. Try again in {mins}m {secs}s."
+        else:
+            u = request.form.get("username", "").strip()
+            p = request.form.get("password", "")
+            info = users.get(u)
+            if not info:
+                _record_fail(ip)
+                error = "User not found."
+            elif info.get("password_hash") != hash_pw(p):
+                _record_fail(ip)
+                error = "Wrong password."
+            else:
+                _reset_fails(ip)
+                session.permanent = True
+                session["user"] = u
+                return redirect("/")
+
+    locked, left = _is_locked(ip)
+    lock_msg = ""
+    if locked:
+        mins = left // 60
+        secs = left % 60
+        lock_msg = f'<div class="error">Account locked. Try again in {mins}m {secs}s.</div>'
+
+    msg = f'<div class="error">{html.escape(error)}</div>' if error else lock_msg
     content = f"""
 <h1>Login</h1>
 <p>Welcome back.</p>
 {msg}
-<form method="post">
-  <input name="username" placeholder="Username" required>
-  <input name="password" type="password" placeholder="Password" required>
+<form method="post" onsubmit="submitOnce(this)">
+  <input name="username" placeholder="Username" required autocomplete="username">
+  <input name="password" type="password" placeholder="Password" required autocomplete="current-password">
   <button class="btn" type="submit">Login</button>
 </form>
 <form action="/signup">
@@ -1153,7 +1248,7 @@ def login():
   <button class="btn2" type="submit">Reset password (admin key)</button>
 </form>
 """
-    return render(content, active="", user=None)
+    return render(content, active="", user=None, title="Login")
 
 
 @app.route("/logout")
@@ -1211,7 +1306,7 @@ def reset_with_admin_key():
   <button class="btn2" type="submit">Back to login</button>
 </form>
 """
-    return render(content, active="", user=None)
+    return render(content, active="", user=None, title="Reset Password")
 
 # ---------- HOME / NOTES ----------
 
