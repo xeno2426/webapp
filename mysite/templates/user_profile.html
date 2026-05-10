@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}@{{ profile_user }} · Xeno WebApp{% endblock %}
+{% block content %}
+<h1>@{{ profile_user }}</h1>
+<p>Public profile.</p>
+{% if avatar_url %}
+  <img src="{{ avatar_url }}" class="avatar" alt="avatar">
+{% endif %}
+<p style="margin-top:8px;font-size:13px;">{{ bio or 'No bio yet.' }}</p>
+<p style="margin-top:12px;"><a href="/friends" class="link">Back to Friends</a></p>
+{% endblock %}

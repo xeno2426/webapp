@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Login · Xeno WebApp{% endblock %}
+{% block content %}
+<h1>Login</h1>
+<p>Welcome back.</p>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="post">
+  <input name="username" placeholder="Username" required autocomplete="username">
+  <input name="password" type="password" placeholder="Password" required autocomplete="current-password">
+  <button class="btn" type="submit">Login</button>
+</form>
+<form action="/signup">
+  <button class="btn2" type="submit">Create account</button>
+</form>
+<form action="/reset">
+  <button class="btn2" type="submit">Reset password (admin key)</button>
+</form>
+{% endblock %}

@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Friends · Xeno WebApp{% endblock %}
+{% block content %}
+<h1>Friends</h1>
+<p>Your friends list.</p>
+
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+{% if info_msg %}<div class="info">{{ info_msg }}</div>{% endif %}
+
+<form method="post">
+  <input name="friend_username" placeholder="Add friend by username">
+  <button class="btn" type="submit">Send Request</button>
+</form>
+
+{% if pending %}
+<p style="font-weight:600;margin-top:14px;">Friend Requests</p>
+{% for req in pending %}
+<div class="friend-card">
+  <div><strong>@{{ req }}</strong> wants to be friends</div>
+  <div style="display:flex;gap:6px;">
+    <form method="post" style="display:inline;">
+      <input type="hidden" name="action" value="accept">
+      <input type="hidden" name="requester" value="{{ req }}">
+      <button class="btn-small" type="submit">Accept</button>
+    </form>
+    <form method="post" style="display:inline;">
+      <input type="hidden" name="action" value="decline">
+      <input type="hidden" name="requester" value="{{ req }}">
+      <button class="btn-small outline" type="submit">Decline</button>
+    </form>
+  </div>
+</div>
+{% endfor %}
+{% endif %}
+
+<p style="font-weight:600;margin-top:14px;">Your Friends ({{ friends|length }})</p>
+<input id="friendSearch" oninput="filterFriends(this.value)"
+       placeholder="Search friends..." style="margin-bottom:8px;">
+
+<div id="friendsList">
+{% if friends %}
+  {% for f in friends %}
+  <div class="friend-card" data-name="{{ f.username | lower }}">
+    <div>
+      <span style="display:inline-block;width:8px;height:8px;border-radius:999px;
+        background:{{ '#22c55e' if f.online else '#4b5563' }};margin-right:6px;"
+        title="{{ 'online' if f.online else 'offline' }}"></span>
+      <strong>@{{ f.username }}</strong>
+      {% if f.unread %}<small> · {{ f.unread }} new</small>{% endif %}
+    </div>
+    <div>
+      <form method="post" style="display:inline;">
+        <input type="hidden" name="action" value="remove">
+        <input type="hidden" name="friend_username" value="{{ f.username }}">
+        <button class="btn-small danger" type="submit"
+                onclick="return openConfirm(this.form);">Delete</button>
+      </form>
+      <form method="get" action="/user/{{ f.username }}" style="display:inline;">
+        <button class="btn-small outline" type="submit">View</button>
+      </form>
+      <form method="get" action="/chat/{{ f.username }}" style="display:inline;">
+        <button class="btn-small" type="submit">Chat</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+  <p style="font-size:13px;color:#64748b;">No friends yet.</p>
+{% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function filterFriends(q){
+  q = q.toLowerCase();
+  document.querySelectorAll('#friendsList .friend-card').forEach(function(c){
+    c.style.display = (c.getAttribute('data-name')||'').includes(q) ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}

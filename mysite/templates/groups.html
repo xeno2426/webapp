@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Groups · Xeno WebApp{% endblock %}
+{% block content %}
+<h1>Groups</h1>
+<p>Your group chats.</p>
+
+<form action="/group/create">
+  <button class="btn">Create New Group</button>
+</form>
+
+{% if groups %}
+  {% for g in groups %}
+  <div class="friend-card">
+    <div>
+      {% if g.avatar %}
+        <img src="{{ g.avatar }}" class="group-avatar">
+      {% endif %}
+      <strong>{{ g.name }}</strong>
+      <small> · {{ g.member_count }} members</small>
+    </div>
+    <div>
+      <form method="get" action="/group/{{ g.id }}">
+        <button class="btn-small" type="submit">Open</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+  <p style="color:#64748b;">No groups yet.</p>
+{% endif %}
+{% endblock %}

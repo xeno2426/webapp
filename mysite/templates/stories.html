@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}Stories · Xeno WebApp{% endblock %}
+{% block content %}
+<h1>Stories</h1>
+<p>Share images or videos that disappear after <strong>16 hours</strong>.</p>
+
+{% if error %}<p style="color:#f97373;font-size:13px;">{{ error }}</p>{% endif %}
+{% if posted_msg %}<div class="info">{{ posted_msg }}</div>{% endif %}
+
+<h2>Create story</h2>
+<form method="post" enctype="multipart/form-data" class="chat-input-row">
+  <input name="caption" placeholder="Say something... (optional)">
+  <div style="margin-top:8px;">
+    <input type="file" name="file" required>
+  </div>
+  <button class="btn" type="submit" style="margin-top:10px;">Post story</button>
+</form>
+
+<h2 style="margin-top:18px;">Stories</h2>
+<div class="stories-grid">
+{% if story_cards %}
+  {% for s in story_cards %}
+  <div class="story-item">
+    <button class="story-circle"
+            onclick="window.location='/stories?user={{ s.username }}&idx=0&view=1';">
+      <div class="story-ring">
+        <img src="{{ s.thumb_url }}" alt="story by @{{ s.username }}" class="story-thumb">
+      </div>
+      <div class="story-name">@{{ s.username }}</div>
+    </button>
+    <div class="story-views">{{ s.view_count }} view{{ 's' if s.view_count != 1 }}</div>
+  </div>
+  {% endfor %}
+{% else %}
+  <p style="font-size:13px;color:#64748b;grid-column:1/-1;">No active stories right now.</p>
+{% endif %}
+</div>
+
+{# ---- Fullscreen story viewer ---- #}
+{% if current_story %}
+{% set s = current_story %}
+<div class="story-overlay" id="storyOverlay"
+     data-next="{{ s.next_url }}"
+     data-prev="{{ s.prev_url }}"
+     data-exit="/stories">
+  <div class="story-viewer">
+    <div class="story-progress">
+      <div id="storyProgressInner" class="story-progress-inner"></div>
+    </div>
+    <div class="story-view-header">
+      <div>
+        <span>@{{ s.user }}</span>
+        <span style="margin-left:6px;font-size:11px;opacity:.7;">{{ s.time_str }}</span>
+      </div>
+    </div>
+
+    {% if s.ftype == 'image' %}
+      <img src="{{ s.url }}" class="story-view-media" alt="story">
+    {% elif s.ftype == 'video' %}
+      <video src="{{ s.url }}" class="story-view-media" controls autoplay></video>
+    {% else %}
+      <a href="{{ s.url }}" target="_blank" class="link">Open file</a>
+    {% endif %}
+
+    {% if s.is_owner %}
+    <div class="story-delete-wrap">
+      <button type="button" class="btn-danger" onclick="openStoryDelete()">Delete</button>
+    </div>
+    {% endif %}
+
+    <div class="story-view-caption">{{ s.caption }}</div>
+    <div class="story-view-views">{{ s.viewers_line }}</div>
+
+    <div id="storyDeleteBox" style="display:none;margin-top:12px;padding:10px 12px;border-radius:12px;border:1px solid #4b5563;background:#020617;">
+      <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Delete this story?</div>
+      <div style="font-size:12px;color:#9ca3af;margin-bottom:8px;">This cannot be undone.</div>
+      <form method="post" style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px;">
+        <input type="hidden" name="action" value="delete_story">
+        <input type="hidden" name="story_id" value="{{ s.id }}">
+        <button type="button" class="btn2" onclick="closeStoryDelete()">Cancel</button>
+        <button type="submit" class="btn-danger">Delete</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if current_story %}
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+  var bar     = document.getElementById('storyProgressInner');
+  var overlay = document.getElementById('storyOverlay');
+  if(!bar || !overlay) return;
+
+  var nextUrl = overlay.getAttribute('data-next') || '/stories';
+  var prevUrl = overlay.getAttribute('data-prev') || '/stories';
+  var video   = overlay.querySelector('video');
+  var duration = video ? null : 15000;
+  var elapsed = 0, last = Date.now(), paused = false, finished = false;
+
+  if(video){
+    video.addEventListener('loadedmetadata', function(){ duration = video.duration * 1000; });
+    video.addEventListener('ended', function(){ finished = true; setTimeout(function(){ location.href=nextUrl; }, 300); });
+    video.addEventListener('pause', function(){ paused = true; });
+    video.addEventListener('play',  function(){ if(!finished){ paused=false; last=Date.now(); } });
+    video.addEventListener('timeupdate', function(){
+      if(!duration||!video.duration) return;
+      bar.style.width = (video.currentTime/video.duration*100)+'%';
+    });
+  }
+
+  function step(){
+    if(finished||video) return;
+    if(!paused){
+      var now=Date.now(); elapsed+=(now-last); last=now;
+      var t=Math.min(elapsed/duration,1);
+      bar.style.width = (t*100)+'%';
+      if(t>=1){ finished=true; setTimeout(function(){ location.href=nextUrl; }, 300); return; }
+    }
+    requestAnimationFrame(step);
+  }
+  if(!video) requestAnimationFrame(step);
+
+  // Swipe
+  var tx=0, ty=0;
+  overlay.addEventListener('touchstart', function(e){ tx=e.changedTouches[0].screenX; ty=e.changedTouches[0].screenY; paused=true; }, {passive:true});
+  overlay.addEventListener('touchend', function(e){
+    var dx=e.changedTouches[0].screenX-tx, dy=e.changedTouches[0].screenY-ty;
+    paused=false; last=Date.now();
+    if(Math.abs(dx)>Math.abs(dy) && Math.abs(dx)>40){ location.href = dx<0 ? nextUrl : prevUrl; }
+  }, {passive:true});
+
+  // Tap zones
+  overlay.addEventListener('click', function(e){
+    if(e.target.closest('#storyDeleteBox')||e.target.closest('.story-delete-wrap')) return;
+    if(!e.target.closest('.story-viewer')){ location.href='/stories'; return; }
+    location.href = e.clientX > window.innerWidth/2 ? nextUrl : prevUrl;
+  });
+
+  // Hold to pause
+  overlay.addEventListener('mousedown', function(){ paused=true; });
+  overlay.addEventListener('mouseup',   function(){ if(!finished){ paused=false; last=Date.now(); } });
+  overlay.addEventListener('mouseleave',function(){ if(!finished){ paused=false; last=Date.now(); } });
+  overlay.addEventListener('contextmenu', function(e){ e.preventDefault(); });
+});
+
+function openStoryDelete(){  document.getElementById('storyDeleteBox').style.display='block'; }
+function closeStoryDelete(){ document.getElementById('storyDeleteBox').style.display='none'; }
+</script>
+{% endif %}
+{% endblock %}

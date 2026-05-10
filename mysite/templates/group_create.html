@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Create Group · Xeno WebApp{% endblock %}
+{% block content %}
+<h1>Create Group</h1>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="post" enctype="multipart/form-data">
+  <input name="name" placeholder="Group name" required>
+  <input name="members" placeholder="Usernames (comma separated)">
+  <div style="margin-top:8px;">
+    <span style="font-size:12px;color:#9ca3af;">Group profile photo (optional)</span><br>
+    <input type="file" name="avatar">
+  </div>
+  <button class="btn" type="submit" style="margin-top:10px;">Create Group</button>
+</form>
+<p><a href="/groups" class="link">Back to Groups</a></p>
+{% endblock %}

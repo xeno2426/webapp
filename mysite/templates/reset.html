@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Reset Password · Xeno WebApp{% endblock %}
+{% block content %}
+<h1>Reset password</h1>
+<p>Use your recovery phrase + admin key.</p>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+{% if info_msg %}<div class="info">{{ info_msg }}</div>{% endif %}
+<form method="post">
+  <input name="username" placeholder="Username" required>
+  <input name="recovery" placeholder="Your recovery phrase" required>
+  <input name="password" type="password" placeholder="New password" required>
+  <input name="password2" type="password" placeholder="Confirm new password" required>
+  <input name="admin_key" placeholder="Admin key" required>
+  <button class="btn" type="submit">Change password</button>
+</form>
+<form action="/login">
+  <button class="btn2" type="submit">Back to login</button>
+</form>
+{% endblock %}

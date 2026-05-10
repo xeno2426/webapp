@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}New Note · Xeno WebApp{% endblock %}
+{% block content %}
+<h1>New note</h1>
+<p>Create a full note.</p>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<form method="post">
+  <input name="title" placeholder="Title">
+  <textarea name="body" placeholder="Write your note..." required></textarea>
+  <button class="btn" type="submit">Save note</button>
+</form>
+<p><a href="/" class="link">Back to Home</a></p>
+{% endblock %}

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Home · Xeno WebApp{% endblock %}
+{% block content %}
+<h1>Home</h1>
+<p>Quick notes and reminders.</p>
+
+<form method="post">
+  <textarea name="quick" placeholder="Quick note..." maxlength="2000"
+    oninput="document.getElementById('qcount').textContent=this.value.length+'/2000'"></textarea>
+  <p style="font-size:11px;color:#64748b;text-align:right;margin-top:-8px;" id="qcount">0/2000</p>
+  <button class="btn" type="submit">Save note</button>
+</form>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;">
+  <p style="font-weight:500;margin:0;">Saved notes ({{ note_count }})</p>
+  <div style="display:flex;gap:6px;align-items:center;">
+    <a href="/?sort=newest" class="btn-small {% if sort != 'newest' %}outline{% endif %}" style="font-size:11px;">Newest</a>
+    <a href="/?sort=oldest" class="btn-small {% if sort != 'oldest' %}outline{% endif %}" style="font-size:11px;">Oldest</a>
+  </div>
+</div>
+
+<p><a href="/note/new" class="link">+ New full note</a></p>
+
+<input id="noteSearch" placeholder="Search notes..." oninput="filterNotes(this.value)" style="margin-bottom:8px;">
+
+<div id="notesList">
+{% if notes %}
+  {% for n in notes %}
+  <div class="note-card"
+       data-title="{{ n.title | lower }}"
+       data-body="{{ n.body | lower }}">
+    <div class="note-title">{{ n.title }}</div>
+    <div class="note-time">{{ n.time }}</div>
+    <div class="note-body" style="white-space:pre-wrap;">{{ n.body }}</div>
+    <div class="note-actions">
+      <form method="get" action="/note/{{ n.index }}">
+        <button class="btn-small outline" type="submit">Edit</button>
+      </form>
+      <form method="post" action="/note/{{ n.index }}/delete">
+        <button class="btn-small outline" type="submit">Delete</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+  <p style="font-size:13px;color:#64748b;">No notes yet.</p>
+{% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function filterNotes(q){
+  q = q.toLowerCase();
+  document.querySelectorAll('#notesList .note-card').forEach(function(c){
+    var t = (c.getAttribute('data-title')||'') + ' ' + (c.getAttribute('data-body')||'');
+    c.style.display = t.includes(q) ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}
