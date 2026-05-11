@@ -17,37 +17,21 @@
 {% if messages %}
   {% for m in messages %}
   <div class="msg-row">
-    <div class="msg-bubble {{ m.align }}" data-index="{{ m.index }}">
-      <div class="msg-author">
-        {{ m.sender }}<span class="msg-time">{{ m.time }}</span>
-      </div>
-
+    <div class="msg-bubble {{ m.align }}" data-id="{{ m.id }}" data-index="{{ m.index }}">
+      <div class="msg-author">{{ m.sender }}<span class="msg-time">{{ m.time }}</span></div>
       {% if m.reply %}
-      <div class="reply-preview">
-        Replying to @{{ m.reply.author }}: {{ m.reply.text }}
-      </div>
+      <div class="reply-preview">Replying to @{{ m.reply.author }}: {{ m.reply.text }}</div>
       {% endif %}
-
       {% if not m.deleted %}
         {% if m.is_image %}
-        <div class="image-box">
-          <a href="{{ m.url }}" target="_blank">
-            <img src="{{ m.url }}" alt="{{ m.filename }}">
-          </a>
-        </div>
+        <div class="image-box"><a href="{{ m.url }}" target="_blank"><img src="{{ m.url }}" alt="{{ m.filename }}"></a></div>
         {% elif m.is_audio %}
-        <div class="voice-box">
-          <audio controls preload="none"><source src="{{ m.url }}"></audio>
-        </div>
+        <div class="voice-box"><audio controls preload="none"><source src="{{ m.url }}"></audio></div>
         {% elif m.ftype == 'file' %}
-        <div class="msg-file">
-          <a href="{{ m.url }}" target="_blank">{{ m.filename }}</a>
-        </div>
+        <div class="msg-file"><a href="{{ m.url }}" target="_blank">{{ m.filename }}</a></div>
         {% endif %}
       {% endif %}
-
       <div class="msg-text">{{ m.text }}</div>
-
       {% if m.reactions %}
       <div class="reaction-row">
         {% for emoji, count in m.reactions.items() %}
@@ -55,17 +39,12 @@
         {% endfor %}
       </div>
       {% endif %}
-
       {% if m.sender == user and m.seen_by_others and not m.deleted %}
       <div class="seen-row">
-        {% if m.seen_by_others|length <= 3 %}
-          Seen by {{ m.seen_by_others | join(', ', attribute='') | replace("'","") }}
-        {% else %}
-          Seen by {{ m.seen_by_others|length }} members
-        {% endif %}
+        {% if m.seen_by_others|length <= 3 %}Seen by {{ m.seen_by_others|join(', ') }}
+        {% else %}Seen by {{ m.seen_by_others|length }} members{% endif %}
       </div>
       {% endif %}
-
       {% if not m.deleted %}
       <div class="msg-actions">
         <form method="post" style="display:inline;">
@@ -76,7 +55,7 @@
         {% if m.sender == user %}
         <form method="post" style="display:inline;">
           <input type="hidden" name="action" value="delete">
-          <input type="hidden" name="msg_index" value="{{ m.index }}">
+          <input type="hidden" name="msg_id" value="{{ m.id }}">
           <button class="msg-action-btn" type="submit">Delete</button>
         </form>
         {% endif %}
@@ -85,18 +64,15 @@
     </div>
   </div>
   {% endfor %}
-
-  {% for t in typing_users %}
-  <div class="msg-row">
+{% else %}
+  <p style="font-size:13px;color:#64748b;" id="emptyMsg">No messages yet.</p>
+{% endif %}
+  <div id="typingIndicator" style="display:none;" class="msg-row">
     <div class="msg-bubble them">
-      <div class="msg-author">{{ t }}<span class="msg-time">typing…</span></div>
+      <div class="msg-author" id="typingName">someone <span class="msg-time">typing…</span></div>
       <div class="msg-text" style="opacity:.7;">typing…</div>
     </div>
   </div>
-  {% endfor %}
-{% else %}
-  <p style="font-size:13px;color:#64748b;">No messages yet.</p>
-{% endif %}
 </div>
 
 {% if reply_pending %}
@@ -110,59 +86,93 @@
 </div>
 {% endif %}
 
-<form method="post" enctype="multipart/form-data" class="chat-input-row">
+<form method="post" enctype="multipart/form-data" class="chat-input-row" id="sendForm">
   <input type="hidden" name="action" value="send">
-  <input name="message" placeholder="Type a message..." id="msgInput">
-  <div style="margin-top:8px;">
-    <input type="file" name="file">
-  </div>
+  <input name="message" placeholder="Type a message..." id="msgInput" autocomplete="off">
+  <div style="margin-top:8px;"><input type="file" name="file"></div>
   <button class="btn" type="submit" style="margin-top:10px;">Send</button>
 </form>
 
 <div class="reaction-picker" id="reactionPicker"></div>
 <form id="reactionForm" method="post" style="display:none;">
   <input type="hidden" name="action" value="react">
-  <input type="hidden" name="msg_index" id="reactionIndex">
+  <input type="hidden" name="msg_id" id="reactionMsgId">
   <input type="hidden" name="emoji" id="reactionEmoji">
 </form>
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
 <script>
 (function(){
-  var box = document.getElementById('chatBox');
+  var ME      = "{{ user }}";
+  var ROOM    = "{{ socket_room }}";
+  var box     = document.getElementById('chatBox');
+  var inp     = document.getElementById('msgInput');
+  var typingEl= document.getElementById('typingIndicator');
+  var typingName = document.getElementById('typingName');
+  var typingTimer = null;
+  var emptyMsg = document.getElementById('emptyMsg');
+
   if(box) box.scrollTop = box.scrollHeight;
 
-  var inp = document.getElementById('msgInput');
   if(inp){
     inp.addEventListener('keydown', function(e){
-      if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); inp.closest('form').submit(); }
+      if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); document.getElementById('sendForm').submit(); }
     });
   }
 
-  setInterval(function(){
-    fetch(window.location.href).then(function(r){ return r.text(); }).then(function(html){
-      var tmp=document.createElement('div'); tmp.innerHTML=html;
-      var nb=tmp.querySelector('#chatBox'), cb=document.getElementById('chatBox');
-      if(nb&&cb){ cb.innerHTML=nb.innerHTML; cb.scrollTop=cb.scrollHeight; }
-    });
-  }, 2000);
+  var socket = io({ transports: ['websocket','polling'] });
+  socket.on('connect', function(){ socket.emit('join', { room: ROOM }); });
+
+  socket.on('new_message', function(m){
+    if(emptyMsg){ emptyMsg.remove(); emptyMsg=null; }
+    var align = (m.sender===ME) ? 'me' : 'them';
+    var mediaHtml='';
+    if(m.ftype==='file'&&m.url){
+      var ext=(m.filename||'').split('.').pop().toLowerCase();
+      var imgX=['png','jpg','jpeg','gif','webp','bmp'];
+      var audX=['mp3','wav','m4a','ogg','oga','aac'];
+      if(imgX.indexOf(ext)!==-1)
+        mediaHtml='<div class="image-box"><a href="'+m.url+'" target="_blank"><img src="'+m.url+'"></a></div>';
+      else if(audX.indexOf(ext)!==-1)
+        mediaHtml='<div class="voice-box"><audio controls preload="none"><source src="'+m.url+'"></audio></div>';
+      else
+        mediaHtml='<div class="msg-file"><a href="'+m.url+'" target="_blank">'+m.filename+'</a></div>';
+    }
+    var row=document.createElement('div');
+    row.className='msg-row';
+    row.innerHTML='<div class="msg-bubble '+align+'" data-id="'+m.id+'">'
+      +'<div class="msg-author">'+m.sender+'<span class="msg-time">'+m.time+'</span></div>'
+      +mediaHtml
+      +'<div class="msg-text">'+(m.text||'')+'</div>'
+      +'</div>';
+    box.insertBefore(row, typingEl);
+    box.scrollTop=box.scrollHeight;
+  });
+
+  socket.on('typing', function(data){
+    if(data.sender===ME) return;
+    if(typingName) typingName.innerHTML=data.sender+' <span class="msg-time">typing…</span>';
+    if(typingEl) typingEl.style.display='';
+    box.scrollTop=box.scrollHeight;
+    clearTimeout(typingTimer);
+    typingTimer=setTimeout(function(){ if(typingEl) typingEl.style.display='none'; },3500);
+  });
 
   if(inp){
-    var tt=null;
     inp.addEventListener('input', function(){
-      fetch('/gtyping/{{ group_id }}', {method:'POST'});
-      clearTimeout(tt); tt=setTimeout(function(){ fetch('/gtyping/{{ group_id }}',{method:'POST'}); }, 3000);
+      socket.emit('typing', { room: ROOM, sender: ME });
     });
   }
 
   // Swipe-to-reply
   var sx=0;
-  document.addEventListener('touchstart', function(e){
+  document.addEventListener('touchstart',function(e){
     var b=e.target.closest('.msg-bubble'); if(!b) return;
     sx=e.changedTouches[0].screenX; b.classList.add('swipe-target');
   },{passive:true});
-  document.addEventListener('touchend', function(e){
+  document.addEventListener('touchend',function(e){
     var b=document.querySelector('.swipe-target'); if(!b) return;
     var dx=e.changedTouches[0].screenX-sx; b.classList.remove('swipe-target');
     if(dx>60){
@@ -178,28 +188,27 @@
   var EMOJIS=['❤️','😂','👍','😮','😢','🔥'];
   var picker=document.getElementById('reactionPicker');
   var rForm=document.getElementById('reactionForm');
-  var rIndex=document.getElementById('reactionIndex');
+  var rMsgId=document.getElementById('reactionMsgId');
   var rEmoji=document.getElementById('reactionEmoji');
-
   function showPicker(bubble){
     if(!picker) return;
-    var idx=bubble.getAttribute('data-index'); if(idx===null) return;
+    var id=bubble.getAttribute('data-id'); if(!id) return;
     picker.innerHTML=EMOJIS.map(function(e){ return '<button type="button" data-emoji="'+e+'">'+e+'</button>'; }).join('');
     var rect=bubble.getBoundingClientRect();
     picker.style.display='block';
     picker.style.left=(rect.left+rect.width/2)+'px';
     picker.style.top=(rect.top-40)+'px';
-    picker.setAttribute('data-index',idx);
+    picker.setAttribute('data-id',id);
   }
-  document.addEventListener('click', function(e){
+  document.addEventListener('click',function(e){
     var b=e.target.closest('.msg-bubble');
     if(b){ showPicker(b); return; }
     if(picker&&picker.style.display==='block'&&!picker.contains(e.target)) picker.style.display='none';
   });
   if(picker){
-    picker.addEventListener('click', function(e){
+    picker.addEventListener('click',function(e){
       if(e.target.tagName.toLowerCase()==='button'){
-        rIndex.value=picker.getAttribute('data-index');
+        rMsgId.value=picker.getAttribute('data-id');
         rEmoji.value=e.target.getAttribute('data-emoji');
         rForm.submit();
       }

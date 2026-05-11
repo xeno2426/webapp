@@ -1,9 +1,15 @@
 from flask import Flask, request, redirect, session, send_from_directory, jsonify, render_template
+from flask_socketio import SocketIO, join_room, emit as socket_emit
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from datetime import datetime, timedelta
 import os, json, hashlib, base64, secrets
+from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet
 import db
+load_dotenv()
 
 # ---------- PATHS ----------
 BASE_DIR     = os.path.dirname(__file__)
@@ -17,6 +23,9 @@ SECRET_MASTER_KEY = os.environ.get("MASTER_KEY", "MY_SUPER_SECRET_KEY_123")
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "CHANGE_THIS_SECRET_KEY")
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
+
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="gevent")
+limiter  = Limiter(get_remote_address, app=app, default_limits=[])
 
 # ---------- INIT DB ON STARTUP ----------
 with app.app_context():
@@ -132,6 +141,27 @@ def inject_globals():
     except:
         unread = 0
     return {"unread_count": unread}
+
+# ---------- SOCKETIO HELPERS ----------
+def dm_room(u1, u2):
+    a, b = sorted([u1, u2])
+    return f"dm_{a}__{b}"
+
+def group_room(group_id):
+    return f"group_{group_id}"
+
+@socketio.on("join")
+def on_join(data):
+    room = data.get("room")
+    if room:
+        join_room(room)
+
+@socketio.on("typing")
+def on_typing(data):
+    room   = data.get("room")
+    sender = data.get("sender")
+    if room and sender:
+        socket_emit("typing", {"sender": sender}, to=room, include_self=False)
 
 # ---------- AUTH ----------
 @app.route("/signup", methods=["GET","POST"])
@@ -386,9 +416,22 @@ def chat(friend):
             else: ftype = "text"
             if txt or ftype == "file":
                 ri = session.pop(f"reply_to_{friend}", None)
-                db.send_message(me, friend, text=encrypt_text(txt),
+                msg_id = db.send_message(me, friend, text=encrypt_text(txt),
                                 ftype=ftype, filename=fname, url=url, reply_to=ri)
                 db.increment_unread(friend, me)
+                # push to both users via WebSocket
+                socketio.emit("new_message", {
+                    "id":       msg_id,
+                    "sender":   me,
+                    "text":     txt,
+                    "time":     "just now",
+                    "ftype":    ftype,
+                    "filename": fname,
+                    "url":      url,
+                    "seen":     False,
+                    "reply":    None,
+                    "reactions":{},
+                }, to=dm_room(me, friend))
         elif action == "set_reply":
             try:   idx = int(request.form.get("msg_index"))
             except: idx = None
@@ -437,7 +480,8 @@ def chat(friend):
 
     return render_template("chat.html", user=me, friend=friend,
                            messages=messages, reply_pending=reply_pending,
-                           typing=typing, active="friends")
+                           typing=typing, active="friends",
+                           socket_room=dm_room(me, friend))
 
 @app.route("/typing/<friend>", methods=["POST"])
 def typing(friend):
@@ -572,8 +616,18 @@ def group_chat(group_id):
             else: ftype = "text"
             if txt or ftype == "file":
                 ri = session.pop(f"greply_to_{group_id}", None)
-                db.send_group_message(group_id, me, text=encrypt_text(txt),
+                msg_id = db.send_group_message(group_id, me, text=encrypt_text(txt),
                                       ftype=ftype, filename=fname, url=url, reply_to=ri)
+                socketio.emit("new_message", {
+                    "id":       msg_id,
+                    "sender":   me,
+                    "text":     txt,
+                    "time":     "just now",
+                    "ftype":    ftype,
+                    "filename": fname,
+                    "url":      url,
+                    "reactions":{},
+                }, to=group_room(group_id))
         elif action == "set_reply":
             try:   idx = int(request.form.get("msg_index"))
             except: idx = None
@@ -624,7 +678,8 @@ def group_chat(group_id):
                            group_id=group_id, is_owner=(group.get("owner")==me),
                            messages=messages, reply_pending=reply_pending,
                            typing_users=typing_users,
-                           avatar_url=group.get("avatar",""), active="groups")
+                           avatar_url=group.get("avatar",""), active="groups",
+                           socket_room=group_room(group_id))
 
 @app.route("/gtyping/<group_id>", methods=["POST"])
 def gtyping(group_id):
