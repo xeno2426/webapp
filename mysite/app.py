@@ -24,7 +24,8 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "CHANGE_THIS_SECRET_KEY")
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="gevent")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="gevent",
+                    logger=False, engineio_logger=False)
 limiter  = Limiter(get_remote_address, app=app, default_limits=[])
 
 # ---------- INIT DB ON STARTUP ----------
