@@ -3,11 +3,12 @@ from flask_socketio import SocketIO, join_room, emit as socket_emit
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from datetime import datetime, timedelta
-import os, json, hashlib, base64, secrets
+import os, json, hashlib, base64, secrets, sys
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet
+sys.path.insert(0, os.path.dirname(__file__))
 import db
 load_dotenv()
 
