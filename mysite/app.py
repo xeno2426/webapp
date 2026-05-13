@@ -3,7 +3,7 @@ from flask_socketio import SocketIO, join_room, emit as socket_emit
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from datetime import datetime, timedelta
-import os, json, hashlib, base64, secrets, sys
+import os, json, hashlib, base64, secrets, sys, hmac, logging
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -18,16 +18,27 @@ UPLOADS_ROOT = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOADS_ROOT, exist_ok=True)
 
 # ---------- CONFIG ----------
-ADMIN_KEY         = os.environ.get("ADMIN_KEY", "XENO-ADMIN-2426")
-SECRET_MASTER_KEY = os.environ.get("MASTER_KEY", "MY_SUPER_SECRET_KEY_123")
+# Fix 1.1 — crash loudly on startup if any secret env var is missing.
+# Never use hardcoded fallbacks for secrets.
+SECRET_KEY        = os.environ.get("SECRET_KEY")
+ADMIN_KEY         = os.environ.get("ADMIN_KEY")
+SECRET_MASTER_KEY = os.environ.get("MASTER_KEY")
+APP_URL           = os.environ.get("APP_URL", "https://webapp-i3ht.onrender.com")
+
+for _name, _val in [("SECRET_KEY", SECRET_KEY), ("ADMIN_KEY", ADMIN_KEY), ("MASTER_KEY", SECRET_MASTER_KEY)]:
+    if not _val:
+        sys.exit(f"FATAL: environment variable {_name} is not set. App cannot start.")
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "CHANGE_THIS_SECRET_KEY")
+app.secret_key = SECRET_KEY
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading",
+# Fix 1.11 — restrict WebSocket CORS to our own domain only.
+socketio = SocketIO(app, cors_allowed_origins=[APP_URL], async_mode="threading",
                     logger=False, engineio_logger=False)
-limiter  = Limiter(get_remote_address, app=app, default_limits=[])
+
+# Fix 4.3 — enable sensible global rate limits; tighter limits applied per-route below.
+limiter  = Limiter(get_remote_address, app=app, default_limits=["300 per day", "60 per hour"])
 
 # ---------- INIT DB ON STARTUP ----------
 with app.app_context():
@@ -53,7 +64,24 @@ def decrypt_text(token):
 
 # ---------- HELPERS ----------
 def current_user(): return session.get("user")
-def hash_pw(pw):    return hashlib.sha256(pw.encode()).hexdigest()
+
+# Fix 1.2 — use werkzeug PBKDF2-HMAC-SHA256 (slow, salted) instead of raw SHA-256.
+def hash_pw(pw):
+    return generate_password_hash(pw)
+
+def verify_pw(stored_hash, pw):
+    """
+    Verify a password against its stored hash.
+    Handles migration: if the stored hash is a 64-char hex string it is a
+    legacy SHA-256 hash. On a successful legacy match the caller should
+    re-hash and persist the new hash so the account upgrades automatically.
+    Returns (ok: bool, needs_rehash: bool).
+    """
+    if stored_hash and len(stored_hash) == 64 and all(c in "0123456789abcdef" for c in stored_hash):
+        # Legacy SHA-256 path
+        legacy_ok = hmac.compare_digest(stored_hash, hashlib.sha256(pw.encode()).hexdigest())
+        return legacy_ok, legacy_ok  # (ok, needs_rehash)
+    return check_password_hash(stored_hash, pw), False
 
 def secure_random_filename(original):
     ext = ("." + original.rsplit(".", 1)[1].lower()) if "." in original else ""
@@ -144,6 +172,23 @@ def inject_globals():
         unread = 0
     return {"unread_count": unread}
 
+# Fix 4.6 — send security headers on every response.
+@app.after_request
+def set_security_headers(response):
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' https://cdnjs.cloudflare.com 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; "
+        "media-src 'self' blob:; "
+        "connect-src 'self' wss:;"
+    )
+    return response
+
 # ---------- SOCKETIO HELPERS ----------
 def dm_room(u1, u2):
     a, b = sorted([u1, u2])
@@ -167,6 +212,7 @@ def on_typing(data):
 
 # ---------- AUTH ----------
 @app.route("/signup", methods=["GET","POST"])
+@limiter.limit("5 per hour")   # Fix 4.3 — prevent signup spam
 def signup():
     if current_user(): return redirect("/")
     error = ""
@@ -179,7 +225,7 @@ def signup():
         elif " " in u or len(u)<3:   error = "Username: 3+ chars, no spaces."
         elif db.user_exists(u):      error = "Username already taken."
         elif p1 != p2:               error = "Passwords do not match."
-        elif len(p1) < 4:            error = "Password too short."
+        elif len(p1) < 8:            error = "Password must be at least 8 characters."  # Fix 4.4
         else:
             db.create_user(u, hash_pw(p1), recovery=rc)
             session.permanent = True
@@ -188,6 +234,7 @@ def signup():
     return render_template("signup.html", error=error)
 
 @app.route("/login", methods=["GET","POST"])
+@limiter.limit("10 per minute; 50 per hour")   # Fix 4.3 — brute-force protection
 def login():
     if current_user(): return redirect("/")
     error = ""
@@ -195,12 +242,19 @@ def login():
         u = request.form.get("username","").strip()
         p = request.form.get("password","")
         info = db.get_user(u)
-        if not info:                              error = "User not found."
-        elif info.get("password_hash") != hash_pw(p): error = "Wrong password."
+        if not info:
+            error = "Invalid username or password."
         else:
-            session.permanent = True
-            session["user"] = u
-            return redirect("/")
+            ok, needs_rehash = verify_pw(info.get("password_hash",""), p)
+            if not ok:
+                error = "Invalid username or password."
+            else:
+                if needs_rehash:
+                    # Fix 1.2 — silently upgrade legacy SHA-256 hash on first login
+                    db.update_user(u, password_hash=hash_pw(p))
+                session.permanent = True
+                session["user"] = u
+                return redirect("/")
     return render_template("login.html", error=error)
 
 @app.route("/logout")
@@ -209,6 +263,7 @@ def logout():
     return redirect("/login")
 
 @app.route("/reset", methods=["GET","POST"])
+@limiter.limit("5 per hour")   # Fix 4.3 — prevent brute-force of admin key
 def reset_with_admin_key():
     error = info_msg = ""
     if request.method == "POST":
@@ -217,14 +272,20 @@ def reset_with_admin_key():
         new_pw2   = request.form.get("password2","")
         recovery  = request.form.get("recovery","").strip()
         admin_key = request.form.get("admin_key","").strip()
-        info = db.get_user(username) if username else None
-        if admin_key != ADMIN_KEY:           error = "Admin key wrong."
-        elif not info:                       error = "User not found."
-        elif new_pw != new_pw2 or len(new_pw)<4: error = "Passwords mismatch or too short."
+
+        # Fix 1.10 — always validate admin key first using constant-time comparison
+        # so the error message never reveals whether the username exists.
+        admin_ok = hmac.compare_digest(admin_key, ADMIN_KEY)
+        info     = db.get_user(username) if username else None
+
+        if not admin_ok or not info:
+            error = "Reset failed. Check your details and try again."
+        elif new_pw != new_pw2 or len(new_pw) < 8:   # Fix 4.4
+            error = "Passwords do not match or are too short (min 8 chars)."
         elif (info.get("recovery","") or "").lower() != recovery.lower():
-            error = "Recovery phrase mismatch."
+            error = "Reset failed. Check your details and try again."
         else:
-            db.update_user(username, password_hash=hash_pw(new_pw))
+            db.update_user(username, password_hash=hash_pw(new_pw))   # Fix 1.2
             info_msg = "Password updated. You can now log in."
     return render_template("reset.html", error=error, info_msg=info_msg)
 
@@ -302,10 +363,11 @@ def profile():
             info_msg = "Recovery phrase saved."
         elif action == "change_password":
             old,new1,new2 = (request.form.get(k,"") for k in ("old_pw","new_pw","new_pw2"))
-            if info.get("password_hash") != hash_pw(old): error = "Old password incorrect."
-            elif new1 != new2 or len(new1)<4:             error = "Passwords mismatch or too short."
+            ok, needs_rehash = verify_pw(info.get("password_hash",""), old)
+            if not ok:                        error = "Old password incorrect."
+            elif new1 != new2 or len(new1)<8: error = "Passwords mismatch or too short (min 8 chars)."  # Fix 4.4
             else:
-                db.update_user(user, password_hash=hash_pw(new1))
+                db.update_user(user, password_hash=hash_pw(new1))   # Fix 1.2
                 info_msg = "Password changed."
         elif action == "avatar":
             f = request.files.get("avatar")
@@ -742,4 +804,5 @@ def ping():
     return ("",204)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"   # Fix 6.2 — never hardcode debug=True
+    app.run(host="0.0.0.0", port=5000, debug=debug)
