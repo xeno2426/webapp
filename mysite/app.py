@@ -2,6 +2,7 @@ from flask import Flask, request, redirect, session, send_from_directory, jsonif
 from flask_socketio import SocketIO, join_room, emit as socket_emit
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_wtf.csrf import CSRFProtect   # Fix 1.3
 from datetime import datetime, timedelta
 import os, json, hashlib, base64, secrets, sys, hmac, logging
 from dotenv import load_dotenv
@@ -39,6 +40,10 @@ socketio = SocketIO(app, cors_allowed_origins=[APP_URL], async_mode="threading",
 
 # Fix 4.3 — enable sensible global rate limits; tighter limits applied per-route below.
 limiter  = Limiter(get_remote_address, app=app, default_limits=["300 per day", "60 per hour"])
+
+# Fix 1.3 — CSRF protection on all state-changing POST routes.
+# Routes that are called by JS fetch() with no form are exempted below via @csrf.exempt.
+csrf = CSRFProtect(app)
 
 # ---------- INIT DB ON STARTUP ----------
 with app.app_context():
@@ -107,6 +112,38 @@ def user_upload_dir(u):
 IMAGE_EXTS = {"png","jpg","jpeg","gif","webp","bmp"}
 AUDIO_EXTS = {"mp3","wav","m4a","ogg","oga","aac"}
 VIDEO_EXTS = {"mp4","webm","mov","m4v"}
+
+# Fix 1.4 — explicit allowlist; anything not here is rejected.
+ALLOWED_EXTENSIONS = IMAGE_EXTS | AUDIO_EXTS | VIDEO_EXTS | {"pdf", "txt"}
+
+# Magic-byte signatures for image formats.
+# If the claimed extension is an image type, we verify the actual file header
+# matches a known image signature so renamed scripts can't slip through.
+_IMAGE_MAGIC = [
+    b'\xff\xd8\xff',        # JPEG
+    b'\x89PNG\r\n\x1a\n',  # PNG
+    b'GIF87a',               # GIF
+    b'GIF89a',               # GIF
+    b'RIFF',                 # WebP (RIFF????WEBP) — also matches WAV, but .wav is audio not image
+    b'BM',                   # BMP
+]
+
+def file_is_safe(file_storage, ext):
+    """
+    Fix 1.4 — two-layer upload validation:
+      1. Extension must be in ALLOWED_EXTENSIONS.
+      2. If it's an image, the actual file header must match a known image signature.
+    Returns True if the file is safe to save.
+    """
+    if not ext or ext not in ALLOWED_EXTENSIONS:
+        return False
+    if ext in IMAGE_EXTS:
+        file_storage.stream.seek(0)
+        header = file_storage.stream.read(12)
+        file_storage.stream.seek(0)
+        if not any(header.startswith(m) for m in _IMAGE_MAGIC):
+            return False
+    return True
 
 def build_messages(chat_data, me):
     messages = []
@@ -199,16 +236,34 @@ def group_room(group_id):
 
 @socketio.on("join")
 def on_join(data):
+    # Fix 1.7 — verify the session user actually belongs to the room before joining.
+    me = session.get("user")
+    if not me:
+        return  # unauthenticated connection — silently drop
     room = data.get("room")
-    if room:
-        join_room(room)
+    if not room:
+        return
+    if room.startswith("dm_"):
+        # Room format: dm_alice__bob — user must be one of the two parties.
+        parts = room[len("dm_"):].split("__")
+        if len(parts) == 2 and me in parts:
+            join_room(room)
+    elif room.startswith("group_"):
+        group_id = room[len("group_"):]
+        group = db.get_group(group_id)
+        if group and me in group.get("members", []):
+            join_room(room)
+    # Any unrecognised room format is silently rejected.
 
 @socketio.on("typing")
 def on_typing(data):
-    room   = data.get("room")
-    sender = data.get("sender")
-    if room and sender:
-        socket_emit("typing", {"sender": sender}, to=room, include_self=False)
+    # Fix 1.7 — ignore the client-supplied sender field; use the authenticated session user.
+    me = session.get("user")
+    if not me:
+        return
+    room = data.get("room")
+    if room:
+        socket_emit("typing", {"sender": me}, to=room, include_self=False)
 
 # ---------- AUTH ----------
 @app.route("/signup", methods=["GET","POST"])
@@ -396,6 +451,9 @@ def profile():
 
 @app.route("/uploads/<username>/<filename>")
 def serve_upload(username, filename):
+    # Fix 1.5 — uploaded files are private; unauthenticated requests get nothing.
+    if not current_user():
+        return redirect("/login")
     return send_from_directory(user_upload_dir(username), filename)
 
 @app.route("/user/<username>")
@@ -473,10 +531,14 @@ def chat(friend):
             file = request.files.get("file")
             ftype = fname = url = ""
             if file and file.filename:
-                ftype = "file"
-                saved = secure_random_filename(secure_filename(file.filename))
-                file.save(os.path.join(user_upload_dir(me), saved))
-                fname = saved; url = f"/uploads/{me}/{saved}"
+                ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+                if not file_is_safe(file, ext):  # Fix 1.4 — reject disallowed/spoofed files
+                    ftype = "text"               # unsafe file silently dropped; message sends as text
+                else:
+                    ftype = "file"
+                    saved = secure_random_filename(secure_filename(file.filename))
+                    file.save(os.path.join(user_upload_dir(me), saved))
+                    fname = saved; url = f"/uploads/{me}/{saved}"
             else: ftype = "text"
             if txt or ftype == "file":
                 ri = session.pop(f"reply_to_{friend}", None)
@@ -548,6 +610,7 @@ def chat(friend):
                            socket_room=dm_room(me, friend))
 
 @app.route("/typing/<friend>", methods=["POST"])
+@csrf.exempt   # Fix 1.3 — called by JS fetch(); only updates typing timestamp
 def typing(friend):
     me = current_user()
     if not me: return ("",401)
@@ -576,14 +639,17 @@ def stories_page():
         else:
             fn    = secure_filename(file.filename)
             ext   = fn.rsplit(".",1)[1].lower() if "." in fn else ""
-            saved = secure_random_filename(fn)
-            file.save(os.path.join(user_upload_dir(me), saved))
-            ftype = ("image" if ext in IMAGE_EXTS else
-                     "video" if ext in VIDEO_EXTS else "file")
-            url = f"/uploads/{me}/{saved}"
-            db.add_story(me, url, ftype=ftype, caption=caption)
-            session["story_posted"] = "Story posted!"
-            return redirect("/stories")
+            if not file_is_safe(file, ext):   # Fix 1.4
+                error = "File type not allowed. Use an image or video."
+            else:
+                saved = secure_random_filename(fn)
+                file.save(os.path.join(user_upload_dir(me), saved))
+                ftype = ("image" if ext in IMAGE_EXTS else
+                         "video" if ext in VIDEO_EXTS else "file")
+                url = f"/uploads/{me}/{saved}"
+                db.add_story(me, url, ftype=ftype, caption=caption)
+                session["story_posted"] = "Story posted!"
+                return redirect("/stories")
 
     user_stories = db.load_stories()
 
@@ -673,10 +739,14 @@ def group_chat(group_id):
             file = request.files.get("file")
             ftype = fname = url = ""
             if file and file.filename:
-                ftype = "file"
-                saved = secure_random_filename(secure_filename(file.filename))
-                file.save(os.path.join(user_upload_dir(me), saved))
-                fname = saved; url = f"/uploads/{me}/{saved}"
+                ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+                if not file_is_safe(file, ext):  # Fix 1.4 — reject disallowed/spoofed files
+                    ftype = "text"               # unsafe file silently dropped; message sends as text
+                else:
+                    ftype = "file"
+                    saved = secure_random_filename(secure_filename(file.filename))
+                    file.save(os.path.join(user_upload_dir(me), saved))
+                    fname = saved; url = f"/uploads/{me}/{saved}"
             else: ftype = "text"
             if txt or ftype == "file":
                 ri = session.pop(f"greply_to_{group_id}", None)
@@ -746,6 +816,7 @@ def group_chat(group_id):
                            socket_room=group_room(group_id))
 
 @app.route("/gtyping/<group_id>", methods=["POST"])
+@csrf.exempt   # Fix 1.3 — called by JS fetch(); only updates typing timestamp
 def gtyping(group_id):
     me = current_user()
     if not me: return ("",401)
@@ -797,6 +868,7 @@ def unread_json():
         return jsonify(ok=False, unread=0)
 
 @app.route("/ping", methods=["POST"])
+@csrf.exempt   # Fix 1.3 — called by JS fetch(); exempted as it only updates last_seen timestamp
 def ping():
     me = current_user()
     if not me: return ("",401)
