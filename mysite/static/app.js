@@ -1,3 +1,20 @@
+// ---- Fix 1.3 — CSRF token auto-injection ----
+// Reads the token from the <meta name="csrf-token"> tag set in base.html and
+// injects a hidden csrf_token field into every static POST form on the page.
+// Dynamic forms created by JS (swipe-to-reply in chat pages) add the token themselves.
+document.addEventListener('DOMContentLoaded', function(){
+  var meta = document.querySelector('meta[name="csrf-token"]');
+  if(!meta) return;
+  var token = meta.getAttribute('content');
+  document.querySelectorAll('form[method="post"], form[method="POST"]').forEach(function(form){
+    if(!form.querySelector('[name="csrf_token"]')){
+      var inp = document.createElement('input');
+      inp.type = 'hidden'; inp.name = 'csrf_token'; inp.value = token;
+      form.appendChild(inp);
+    }
+  });
+});
+
 // ---- Delete confirm modal ----
 let deleteForm = null;
 function openConfirm(form){ deleteForm = form; document.getElementById("confirmModal").style.display = "flex"; return false; }
