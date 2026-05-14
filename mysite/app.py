@@ -3,7 +3,7 @@ from flask_socketio import SocketIO, join_room, emit as socket_emit
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect   # Fix 1.3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os, json, hashlib, base64, secrets, sys, hmac, logging, uuid
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
@@ -35,7 +35,8 @@ app.secret_key = SECRET_KEY
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 
 # Fix 1.11 — restrict WebSocket CORS to our own domain only.
-socketio = SocketIO(app, cors_allowed_origins=[APP_URL], async_mode="threading",
+# Fix 6.4 — async_mode matches the eventlet worker class in Procfile.
+socketio = SocketIO(app, cors_allowed_origins=[APP_URL], async_mode="eventlet",
                     logger=False, engineio_logger=False)
 
 # Fix 4.3 — enable sensible global rate limits; tighter limits applied per-route below.
@@ -66,6 +67,12 @@ def decrypt_text(token):
     if not token: return ""
     try: return get_cipher().decrypt(token.encode()).decode()
     except Exception: return token
+
+# Fix 4.2 — always store and compare UTC times.
+# DB columns are TIMESTAMP (no TZ) so psycopg2 returns naive datetimes.
+# utc_now() returns a naive UTC datetime that compares safely with DB values.
+def utc_now():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 # ---------- HELPERS ----------
 def current_user(): return session.get("user")
@@ -117,7 +124,7 @@ def time_ago(ts):
     try:
         if isinstance(ts, str):
             ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-        s = int((datetime.now() - ts).total_seconds())
+        s = int((utc_now() - ts).total_seconds())
         if s < 60:    return "just now"
         if s < 3600:  return f"{s//60}m ago"
         if s < 86400: return f"{s//3600}h ago"
@@ -187,12 +194,10 @@ def build_messages(chat_data, me):
                          "text": (decrypt_text(rm.get("text","")) or "[attachment]")[:40]}
 
         raw_reactions = msg.get("reactions") or {}
-        if isinstance(raw_reactions, str):
-            try: raw_reactions = json.loads(raw_reactions)
-            except Exception: raw_reactions = {}
+        # Fix 3.5 — reactions is now JSONB; psycopg2 returns a dict directly.
         reaction_counts = {}
         for em in raw_reactions.values():
-            reaction_counts[em] = reaction_counts.get(em,0) + 1
+            reaction_counts[em] = reaction_counts.get(em, 0) + 1
 
         seen_by = msg.get("seen_by") or []
         seen_by_others = [u for u in seen_by if u != me]
@@ -263,7 +268,12 @@ def on_join(data):
     room = data.get("room")
     if not room:
         return
-    if room.startswith("dm_"):
+    # Fix 5.4 — personal room for cross-page unread notifications.
+    # Each logged-in user joins "user_{username}" so the server can push
+    # unread_update events without the user needing to be in a chat page.
+    if room == f"user_{me}":
+        join_room(room)
+    elif room.startswith("dm_"):
         # Room format: dm_alice__bob — user must be one of the two parties.
         parts = room[len("dm_"):].split("__")
         if len(parts) == 2 and me in parts:
@@ -381,12 +391,29 @@ def home():
             db.add_note(user, txt.splitlines()[0][:60], txt)
         return redirect("/")
     sort  = request.args.get("sort","newest")
-    notes = db.load_notes(user, sort=sort)
+    q     = request.args.get("q","").strip()
+    # Fix 5.3 — filter notes server-side using the q param.
+    # Client-side search exposed full note bodies in data-body HTML attributes.
+    notes = db.search_notes(user, q, sort=sort) if q else db.load_notes(user, sort=sort)
     note_list = [{"id":n["id"],"title":n.get("title","Untitled"),
                   "body":n.get("body",""),"time":time_ago(n.get("created_at"))}
                  for n in notes]
     return render_template("home.html", user=user, notes=note_list,
-                           note_count=len(notes), sort=sort, active="home")
+                           note_count=len(notes), sort=sort, q=q, active="home")
+
+# Fix 5.5 — server-side notes search JSON endpoint for potential JS use.
+@app.route("/notes/search")
+def notes_search():
+    user = current_user()
+    if not user: return jsonify(ok=False), 401
+    q     = request.args.get("q","").strip()
+    sort  = request.args.get("sort","newest")
+    notes = db.search_notes(user, q, sort=sort) if q else db.load_notes(user, sort=sort)
+    return jsonify(ok=True, notes=[
+        {"id":n["id"],"title":n.get("title",""),
+         "body":n.get("body",""),"time":time_ago(n.get("created_at"))}
+        for n in notes
+    ])
 
 @app.route("/note/new", methods=["GET","POST"])
 def note_new():
@@ -497,7 +524,7 @@ def user_profile(username):
 def friends():
     me = current_user()
     if not me: return redirect("/login")
-    db.update_user(me, last_seen=datetime.now())
+    db.update_user(me, last_seen=utc_now())
     error = info_msg = ""
 
     if request.method == "POST":
@@ -525,17 +552,21 @@ def friends():
 
     friends_list = db.get_friends(me)
     friends_data = []
+    # Fix 3.2 — one bulk query for all friend rows; one query for all unread counts.
+    # Previously called get_user() + get_unread_dict() inside the loop = 2N queries.
+    friends_info   = db.get_users_bulk(friends_list)          # {username: user_dict}
+    unread_by_user = db.get_unread_dict(me)                   # {username: count}
     for f in sorted(friends_list):
-        fi = db.get_user(f) or {}
+        fi        = friends_info.get(f) or {}
         last_seen = fi.get("last_seen")
-        online = False
+        online    = False
         if last_seen:
             try:
-                ts = last_seen if isinstance(last_seen, datetime) else datetime.strptime(str(last_seen), "%Y-%m-%d %H:%M:%S")
-                online = (datetime.now() - ts) < timedelta(seconds=40)
+                ts     = last_seen if isinstance(last_seen, datetime) else datetime.strptime(str(last_seen), "%Y-%m-%d %H:%M:%S")
+                online = (utc_now() - ts) < timedelta(seconds=40)
             except Exception: pass
-        friends_data.append({"username":f,"online":online,
-                              "unread":db.get_unread_dict(me).get(f,0)})
+        friends_data.append({"username": f, "online": online,
+                              "unread": unread_by_user.get(f, 0)})
 
     return render_template("friends.html", user=me,
                            friends=friends_data,
@@ -571,7 +602,12 @@ def chat(friend):
                 msg_id = db.send_message(me, friend, text=encrypt_text(txt),
                                 ftype=ftype, filename=fname, url=url, reply_to=ri)
                 db.increment_unread(friend, me)
-                # push to both users via WebSocket
+                # Fix 5.4 — push unread count to recipient's personal room so
+                # app.js can update the banner instantly without polling.
+                total   = db.count_unread(friend)
+                senders = db.get_unread_senders(friend)
+                socketio.emit("unread_update", {"unread": total, "senders": senders},
+                              to=f"user_{friend}")
                 socketio.emit("new_message", {
                     "id":       msg_id,
                     "sender":   me,
@@ -628,7 +664,7 @@ def chat(friend):
     if fi.get("typing_to") == me and ts_str:
         try:
             ts = ts_str if isinstance(ts_str, datetime) else datetime.strptime(str(ts_str), "%Y-%m-%d %H:%M:%S")
-            if datetime.now() - ts < timedelta(seconds=4): typing = friend
+            if utc_now() - ts < timedelta(seconds=4): typing = friend
         except Exception: pass
 
     return render_template("chat.html", user=me, friend=friend,
@@ -641,7 +677,7 @@ def chat(friend):
 def typing(friend):
     me = current_user()
     if not me: return ("",401)
-    db.update_user(me, typing_to=friend, typing_ts=datetime.now())
+    db.update_user(me, typing_to=friend, typing_ts=utc_now())
     return ("",204)
 
 # ---------- STORIES ----------
@@ -750,7 +786,7 @@ def create_group():
         if not name:            error = "Group name required."
         elif len(members) < 2:  error = "Add at least 1 other valid user."
         else:
-            gid        = str(uuid.uuid4())  # Fix 2.4 — was int(datetime.now().timestamp()), collision risk
+            gid        = str(uuid.uuid4())  # Fix 2.4 — was int(utc_now().timestamp()), collision risk
             avatar_url = ""
             if avatar_file and avatar_file.filename:
                 fn    = secure_random_filename(secure_filename(avatar_file.filename))
@@ -799,6 +835,15 @@ def group_chat(group_id):
                     "url":      url,
                     "reactions":{},
                 }, to=group_room(group_id))
+                # Fix 5.4 — push unread_update to every other member's personal room.
+                group = db.get_group(group_id)
+                for member in (group.get("members") or []):
+                    if member == me:
+                        continue
+                    total   = db.count_unread(member)
+                    senders = db.get_unread_senders(member)
+                    socketio.emit("unread_update", {"unread": total, "senders": senders},
+                                  to=f"user_{member}")
         elif action == "set_reply":
             # Fix 2.2 — read msg_id which is the real DB row id, not a loop index
             try:   rid = int(request.form.get("msg_id"))
@@ -843,7 +888,7 @@ def group_chat(group_id):
         if fi.get("typing_group") == group_id and ts_str:
             try:
                 ts = ts_str if isinstance(ts_str, datetime) else datetime.strptime(str(ts_str), "%Y-%m-%d %H:%M:%S")
-                if datetime.now() - ts < timedelta(seconds=4): typing_users.append(m)
+                if utc_now() - ts < timedelta(seconds=4): typing_users.append(m)
             except Exception: pass
 
     return render_template("group_chat.html", user=me, group=group,
@@ -858,7 +903,7 @@ def group_chat(group_id):
 def gtyping(group_id):
     me = current_user()
     if not me: return ("",401)
-    db.update_user(me, typing_group=group_id, typing_group_ts=datetime.now())
+    db.update_user(me, typing_group=group_id, typing_group_ts=utc_now())
     return ("",204)
 
 @app.route("/group/<group_id>/admin", methods=["GET","POST"])
@@ -910,7 +955,7 @@ def unread_json():
 def ping():
     me = current_user()
     if not me: return ("",401)
-    db.update_user(me, last_seen=datetime.now())
+    db.update_user(me, last_seen=utc_now())
     return ("",204)
 
 if __name__ == "__main__":
