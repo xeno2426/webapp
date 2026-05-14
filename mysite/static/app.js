@@ -1,7 +1,4 @@
 // ---- Fix 1.3 — CSRF token auto-injection ----
-// Reads the token from the <meta name="csrf-token"> tag set in base.html and
-// injects a hidden csrf_token field into every static POST form on the page.
-// Dynamic forms created by JS (swipe-to-reply in chat pages) add the token themselves.
 document.addEventListener('DOMContentLoaded', function(){
   var meta = document.querySelector('meta[name="csrf-token"]');
   if(!meta) return;
@@ -43,37 +40,67 @@ document.addEventListener('DOMContentLoaded', function(){
   });
 });
 
-// ---- Notification banner + online ping ----
+// ---- Notification banner ----
+var _notifBanner = null;
+function ensureBanner(){
+  if(_notifBanner) return _notifBanner;
+  _notifBanner = document.createElement('div');
+  _notifBanner.className = 'notif-banner';
+  _notifBanner.style.display = 'none';
+  // Fix 1.8 — build banner with DOM API; no innerHTML with user-supplied data
+  var span = document.createElement('span'); span.id = 'notifText';
+  var link = document.createElement('a');
+  link.href = '/friends'; link.className = 'notif-link'; link.textContent = 'Open chats';
+  _notifBanner.appendChild(span);
+  _notifBanner.appendChild(link);
+  document.body.appendChild(_notifBanner);
+  return _notifBanner;
+}
+function updateBanner(count, senders){
+  var b = ensureBanner();
+  var textEl = b.querySelector('#notifText');
+  if(!count || count <= 0){ b.style.display = 'none'; return; }
+  var msg = (count === 1 ? '1 new message' : count + ' new messages');
+  if(senders && senders.length > 0){
+    var names = senders.slice(0,2).map(function(s){ return '@'+s; }).join(', ');
+    if(senders.length > 2) names += ' +' + (senders.length-2) + ' more';
+    msg += ' from ' + names;
+  }
+  textEl.textContent = msg;  // textContent — safe
+  b.style.display = 'flex';
+}
+
+// ---- Fix 5.4 — Global socket for unread notifications (replaces polling) ----
+// Socket.io is loaded in base.html. We connect once per page, join the personal
+// room "user_{username}", and listen for unread_update events from the server.
+// The server pushes this event whenever a message is sent to the current user,
+// so the banner updates instantly without any polling interval.
 document.addEventListener('DOMContentLoaded', function(){
-  var banner = null;
-  function ensureBanner(){
-    if(banner) return banner;
-    banner = document.createElement('div');
-    banner.className = 'notif-banner';
-    banner.style.display = 'none';
-    banner.innerHTML = '<span id="notifText"></span><a href="/friends" class="notif-link">Open chats</a>';
-    document.body.appendChild(banner);
-    return banner;
-  }
-  function updateBanner(count, senders){
-    var b = ensureBanner(), textEl = b.querySelector('#notifText');
-    if(!textEl) return;
-    if(!count || count <= 0){ b.style.display = 'none'; return; }
-    var who = '';
-    if(senders && senders.length > 0){
-      var names = senders.slice(0,2).map(function(s){ return '@'+s; }).join(', ');
-      if(senders.length > 2) names += ' +' + (senders.length-2) + ' more';
-      who = ' from ' + names;
-    }
-    textEl.textContent = (count === 1 ? '1 new message' : count + ' new messages') + who;
-    b.style.display = 'flex';
-  }
-  function pollUnread(){
-    fetch('/unread.json').then(function(r){ return r.json(); })
-      .then(function(d){ if(d && d.ok) updateBanner(d.unread||0, d.senders||[]); })
-      .catch(function(){});
-  }
-  function pingOnline(){ fetch('/ping',{method:'POST'}).catch(function(){}); }
-  pollUnread(); setInterval(pollUnread, 5000);
-  pingOnline(); setInterval(pingOnline, 20000);
+  var userMeta = document.querySelector('meta[name="current-user"]');
+  if(!userMeta) return;                         // not logged in, nothing to do
+  var username = userMeta.getAttribute('content');
+  if(!username) return;
+
+  // Only connect if not already on a chat page (chat pages manage their own socket).
+  // We check for the chatBox element as a signal that a chat page is already running.
+  var onChatPage = !!document.getElementById('chatBox');
+
+  var socket = (typeof io !== 'undefined') ? io({ transports: ['websocket','polling'] }) : null;
+  if(!socket) return;
+
+  socket.on('connect', function(){
+    // Join personal notification room
+    socket.emit('join', { room: 'user_' + username });
+    // Chat pages also join their own room — that's handled in the chat template's script.
+  });
+
+  // Fix 5.4 — update banner immediately when server pushes unread_update
+  socket.on('unread_update', function(d){
+    updateBanner(d.unread || 0, d.senders || []);
+  });
+
+  // Keep pinging last_seen for online status indicator (unchanged)
+  function pingOnline(){ fetch('/ping', { method: 'POST' }).catch(function(){}); }
+  pingOnline();
+  setInterval(pingOnline, 20000);
 });
