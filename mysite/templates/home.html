@@ -33,10 +33,10 @@
     <div class="note-time">{{ n.time }}</div>
     <div class="note-body" style="white-space:pre-wrap;">{{ n.body }}</div>
     <div class="note-actions">
-      <form method="get" action="/note/{{ n.index }}">
+      <form method="get" action="/note/{{ n.id }}">
         <button class="btn-small outline" type="submit">Edit</button>
       </form>
-      <form method="post" action="/note/{{ n.index }}/delete">
+      <form method="post" action="/note/{{ n.id }}/delete">
         <button class="btn-small outline" type="submit">Delete</button>
       </form>
     </div>
