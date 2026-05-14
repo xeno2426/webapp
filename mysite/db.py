@@ -90,26 +90,32 @@ def get_user(u): return query("SELECT * FROM users WHERE username=%s",(u,),one=T
 def user_exists(u): return bool(query("SELECT 1 FROM users WHERE username=%s",(u,),one=True))
 def create_user(username,password_hash,bio="",avatar="",recovery=""):
     execute("INSERT INTO users(username,password_hash,bio,avatar,recovery) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(username) DO NOTHING",(username,password_hash,bio,avatar,recovery))
-def update_user(username,**kwargs):
-    allowed={"password_hash","bio","avatar","recovery","last_seen","typing_to","typing_ts","typing_group","typing_group_ts"}
-    conn=get_conn()
-    try:
-        cur=conn.cursor()
-        for k,v in kwargs.items():
-            if k in allowed:
-                cur.execute(f"UPDATE users SET {k}=%s WHERE username=%s",(v,username))
-        conn.commit()
-    finally: conn.close()
+def update_user(username, **kwargs):
+    # Fix 1.6 — build a single batched UPDATE instead of one query per column.
+    # Column names are validated against an explicit allowlist before being
+    # interpolated into SQL, so this is safe against injection.
+    ALLOWED = {"password_hash","bio","avatar","recovery","last_seen",
+               "typing_to","typing_ts","typing_group","typing_group_ts"}
+    pairs = [(k, v) for k, v in kwargs.items() if k in ALLOWED]
+    if not pairs:
+        return
+    set_clause = ", ".join(f"{k} = %s" for k, _ in pairs)
+    values     = [v for _, v in pairs] + [username]
+    execute(f"UPDATE users SET {set_clause} WHERE username = %s", values)
 def delete_user(username):
-    for sql in ["DELETE FROM friend_requests WHERE from_user=%s OR to_user=%s",
-                "DELETE FROM friends WHERE user1=%s OR user2=%s",
-                "DELETE FROM unread WHERE username=%s OR from_user=%s",
-                "DELETE FROM notes WHERE username=%s","DELETE FROM stories WHERE username=%s",
-                "DELETE FROM group_members WHERE username=%s","DELETE FROM users WHERE username=%s"]:
-        if sql.count('%s') == 2:
-            execute(sql,(username,username))
-        else:
-            execute(sql,(username,))
+    # Fix 2.3 — cascade delete everything owned by or addressed to this user.
+    # Previous version was missing messages and group_messages, leaving orphaned rows.
+    two = lambda sql: execute(sql, (username, username))
+    one = lambda sql: execute(sql, (username,))
+    two("DELETE FROM messages WHERE sender=%s OR recipient=%s")
+    one("DELETE FROM group_messages WHERE sender=%s")
+    two("DELETE FROM friend_requests WHERE from_user=%s OR to_user=%s")
+    two("DELETE FROM friends WHERE user1=%s OR user2=%s")
+    two("DELETE FROM unread WHERE username=%s OR from_user=%s")
+    one("DELETE FROM notes WHERE username=%s")
+    one("DELETE FROM stories WHERE username=%s")
+    one("DELETE FROM group_members WHERE username=%s")
+    one("DELETE FROM users WHERE username=%s")
 
 # FRIENDS
 def get_friends(username):

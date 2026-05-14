@@ -4,7 +4,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect   # Fix 1.3
 from datetime import datetime, timedelta
-import os, json, hashlib, base64, secrets, sys, hmac, logging
+import os, json, hashlib, base64, secrets, sys, hmac, logging, uuid
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -60,12 +60,12 @@ def get_cipher():
 def encrypt_text(text):
     if not text: return ""
     try: return get_cipher().encrypt(text.encode()).decode()
-    except: return text
+    except Exception: return text
 
 def decrypt_text(token):
     if not token: return ""
     try: return get_cipher().decrypt(token.encode()).decode()
-    except: return token
+    except Exception: return token
 
 # ---------- HELPERS ----------
 def current_user(): return session.get("user")
@@ -88,6 +88,26 @@ def verify_pw(stored_hash, pw):
         return legacy_ok, legacy_ok  # (ok, needs_rehash)
     return check_password_hash(stored_hash, pw), False
 
+# Fix 5.2 — hash recovery phrases like passwords (they're used for identity verification).
+def hash_recovery(phrase):
+    """Hash a recovery phrase for storage. Phrase is lowercased for case-insensitive matching."""
+    return generate_password_hash(phrase.lower()) if phrase else ""
+
+def verify_recovery(stored, provided):
+    """
+    Verify a recovery phrase. Handles migration from legacy plaintext storage.
+    Werkzeug hashes start with 'pbkdf2:' or 'scrypt:'. Anything else is treated
+    as a legacy plaintext value and compared with hmac.compare_digest.
+    Returns (ok: bool, needs_rehash: bool).
+    """
+    if not stored:
+        return (not provided), False  # both empty = match; provided but no stored = no match
+    if stored.startswith(("pbkdf2:", "scrypt:")):
+        return check_password_hash(stored, provided.lower()), False
+    # Legacy plaintext path
+    ok = hmac.compare_digest(stored.lower(), (provided or "").lower())
+    return ok, ok  # (ok, needs_rehash)
+
 def secure_random_filename(original):
     ext = ("." + original.rsplit(".", 1)[1].lower()) if "." in original else ""
     return f"{secrets.token_urlsafe(16)}{ext}"
@@ -102,7 +122,7 @@ def time_ago(ts):
         if s < 3600:  return f"{s//60}m ago"
         if s < 86400: return f"{s//3600}h ago"
         return ts.strftime("%b %d")
-    except: return str(ts)
+    except Exception: return str(ts)
 
 def user_upload_dir(u):
     p = os.path.join(UPLOADS_ROOT, u)
@@ -169,7 +189,7 @@ def build_messages(chat_data, me):
         raw_reactions = msg.get("reactions") or {}
         if isinstance(raw_reactions, str):
             try: raw_reactions = json.loads(raw_reactions)
-            except: raw_reactions = {}
+            except Exception: raw_reactions = {}
         reaction_counts = {}
         for em in raw_reactions.values():
             reaction_counts[em] = reaction_counts.get(em,0) + 1
@@ -205,7 +225,7 @@ def inject_globals():
     u = current_user()
     try:
         unread = db.count_unread(u) if u else 0
-    except:
+    except Exception:
         unread = 0
     return {"unread_count": unread}
 
@@ -282,7 +302,7 @@ def signup():
         elif p1 != p2:               error = "Passwords do not match."
         elif len(p1) < 8:            error = "Password must be at least 8 characters."  # Fix 4.4
         else:
-            db.create_user(u, hash_pw(p1), recovery=rc)
+            db.create_user(u, hash_pw(p1), recovery=hash_recovery(rc))  # Fix 5.2
             session.permanent = True
             session["user"] = u
             return redirect("/")
@@ -337,11 +357,17 @@ def reset_with_admin_key():
             error = "Reset failed. Check your details and try again."
         elif new_pw != new_pw2 or len(new_pw) < 8:   # Fix 4.4
             error = "Passwords do not match or are too short (min 8 chars)."
-        elif (info.get("recovery","") or "").lower() != recovery.lower():
-            error = "Reset failed. Check your details and try again."
         else:
-            db.update_user(username, password_hash=hash_pw(new_pw))   # Fix 1.2
-            info_msg = "Password updated. You can now log in."
+            # Fix 5.2 — use verify_recovery to support both hashed and legacy plaintext phrases
+            recovery_ok, recovery_needs_rehash = verify_recovery(info.get("recovery",""), recovery)
+            if not recovery_ok:
+                error = "Reset failed. Check your details and try again."
+            else:
+                updates = {"password_hash": hash_pw(new_pw)}
+                if recovery_needs_rehash:
+                    updates["recovery"] = hash_recovery(recovery)  # upgrade legacy plaintext
+                db.update_user(username, **updates)
+                info_msg = "Password updated. You can now log in."
     return render_template("reset.html", error=error, info_msg=info_msg)
 
 # ---------- HOME / NOTES ----------
@@ -414,7 +440,7 @@ def profile():
             db.update_user(user, bio=request.form.get("bio","")[:400])
             info_msg = "Bio updated."
         elif action == "update_recovery":
-            db.update_user(user, recovery=request.form.get("recovery","").strip())
+            db.update_user(user, recovery=hash_recovery(request.form.get("recovery","").strip()))  # Fix 5.2
             info_msg = "Recovery phrase saved."
         elif action == "change_password":
             old,new1,new2 = (request.form.get(k,"") for k in ("old_pw","new_pw","new_pw2"))
@@ -507,7 +533,7 @@ def friends():
             try:
                 ts = last_seen if isinstance(last_seen, datetime) else datetime.strptime(str(last_seen), "%Y-%m-%d %H:%M:%S")
                 online = (datetime.now() - ts) < timedelta(seconds=40)
-            except: pass
+            except Exception: pass
         friends_data.append({"username":f,"online":online,
                               "unread":db.get_unread_dict(me).get(f,0)})
 
@@ -559,21 +585,22 @@ def chat(friend):
                     "reactions":{},
                 }, to=dm_room(me, friend))
         elif action == "set_reply":
-            try:   idx = int(request.form.get("msg_index"))
-            except: idx = None
+            # Fix 2.2 — read msg_id which is the real DB row id, not a loop index
+            try:   rid = int(request.form.get("msg_id"))
+            except Exception: rid = None
             key = f"reply_to_{friend}"
-            if idx is None or idx < 0: session.pop(key, None)
-            else: session[key] = idx
+            if rid is None or rid < 0: session.pop(key, None)
+            else: session[key] = rid
         elif action == "delete":
             try: mid = int(request.form.get("msg_id"))
-            except: mid = -1
+            except Exception: mid = -1
             if mid > 0:
                 msg = db.get_message_by_id(mid)
                 if msg and msg.get("sender") == me:
                     db.soft_delete_message(mid)
         elif action == "react":
             try: mid = int(request.form.get("msg_id"))
-            except: mid = -1
+            except Exception: mid = -1
             emoji = request.form.get("emoji","❤️")
             if mid > 0: db.react_message(mid, me, emoji)
         return redirect(f"/chat/{friend}")
@@ -602,7 +629,7 @@ def chat(friend):
         try:
             ts = ts_str if isinstance(ts_str, datetime) else datetime.strptime(str(ts_str), "%Y-%m-%d %H:%M:%S")
             if datetime.now() - ts < timedelta(seconds=4): typing = friend
-        except: pass
+        except Exception: pass
 
     return render_template("chat.html", user=me, friend=friend,
                            messages=messages, reply_pending=reply_pending,
@@ -628,7 +655,7 @@ def stories_page():
         action = request.form.get("action","create")
         if action == "delete_story":
             try: sid = int(request.form.get("story_id"))
-            except: sid = 0
+            except Exception: sid = 0
             if sid: db.delete_story(sid, me)
             return redirect("/stories")
 
@@ -653,6 +680,11 @@ def stories_page():
 
     user_stories = db.load_stories()
 
+    # Fix 1.9 — only show stories from yourself and your friends.
+    # Stories are private; strangers should not be able to see them.
+    friends_set  = set(db.get_friends(me)) | {me}
+    user_stories = {u: s for u, s in user_stories.items() if u in friends_set}
+
     story_cards = []
     for uname, arr in user_stories.items():
         latest   = arr[-1]
@@ -668,7 +700,7 @@ def stories_page():
     if owner and owner in user_stories:
         arr = user_stories[owner]
         try: idx = max(0, int(idx_s))
-        except: idx = 0
+        except Exception: idx = 0
         if 0 <= idx < len(arr):
             s        = arr[idx]
             next_url = f"/stories?user={owner}&idx={idx+1}&view=1" if idx+1<len(arr) else "/stories"
@@ -676,8 +708,13 @@ def stories_page():
             if mark_view and me != owner:
                 db.add_story_viewer(s["id"], me)
             viewers = s.get("viewers") or []
-            viewers_line = ("No views yet." if not viewers
-                            else f"Seen by ({len(viewers)}): " + ", ".join("@"+v for v in viewers))
+            # Fix 4.1 — viewer names are private; only the story owner sees who viewed.
+            # Other viewers only see the count so usernames aren't leaked.
+            if owner == me:
+                viewers_line = ("No views yet." if not viewers
+                                else f"Seen by ({len(viewers)}): " + ", ".join("@"+v for v in viewers))
+            else:
+                viewers_line = f"{len(viewers)} view{'s' if len(viewers) != 1 else ''}"
             ts = s.get("created_at")
             time_str = ts.strftime("%Y-%m-%d %H:%M") if isinstance(ts, datetime) else str(ts)[:16]
             current_story = {"user":owner,"caption":s.get("caption",""),
@@ -713,7 +750,7 @@ def create_group():
         if not name:            error = "Group name required."
         elif len(members) < 2:  error = "Add at least 1 other valid user."
         else:
-            gid        = str(int(datetime.now().timestamp()))
+            gid        = str(uuid.uuid4())  # Fix 2.4 — was int(datetime.now().timestamp()), collision risk
             avatar_url = ""
             if avatar_file and avatar_file.filename:
                 fn    = secure_random_filename(secure_filename(avatar_file.filename))
@@ -763,21 +800,22 @@ def group_chat(group_id):
                     "reactions":{},
                 }, to=group_room(group_id))
         elif action == "set_reply":
-            try:   idx = int(request.form.get("msg_index"))
-            except: idx = None
+            # Fix 2.2 — read msg_id which is the real DB row id, not a loop index
+            try:   rid = int(request.form.get("msg_id"))
+            except Exception: rid = None
             key = f"greply_to_{group_id}"
-            if idx is None or idx < 0: session.pop(key, None)
-            else: session[key] = idx
+            if rid is None or rid < 0: session.pop(key, None)
+            else: session[key] = rid
         elif action == "delete":
             try: mid = int(request.form.get("msg_id"))
-            except: mid = -1
+            except Exception: mid = -1
             if mid > 0:
                 msg = db.get_group_message_by_id(mid)
                 if msg and msg.get("sender") == me:
                     db.soft_delete_group_message(mid)
         elif action == "react":
             try: mid = int(request.form.get("msg_id"))
-            except: mid = -1
+            except Exception: mid = -1
             emoji = request.form.get("emoji","❤️")
             if mid > 0: db.react_group_message(mid, me, emoji)
         return redirect(f"/group/{group_id}")
@@ -806,7 +844,7 @@ def group_chat(group_id):
             try:
                 ts = ts_str if isinstance(ts_str, datetime) else datetime.strptime(str(ts_str), "%Y-%m-%d %H:%M:%S")
                 if datetime.now() - ts < timedelta(seconds=4): typing_users.append(m)
-            except: pass
+            except Exception: pass
 
     return render_template("group_chat.html", user=me, group=group,
                            group_id=group_id, is_owner=(group.get("owner")==me),
@@ -864,7 +902,7 @@ def unread_json():
         total   = db.count_unread(me)
         senders = db.get_unread_senders(me)
         return jsonify(ok=True, unread=total, senders=senders)
-    except:
+    except Exception:
         return jsonify(ok=False, unread=0)
 
 @app.route("/ping", methods=["POST"])
