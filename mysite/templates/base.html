@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <title>{% block title %}Xeno WebApp{% endblock %}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf-token" content="{{ csrf_token() }}">  {# Fix 1.3 — read by app.js to inject into all forms #}
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>

@@ -114,6 +114,10 @@
   var typingTimer = null;
   var emptyMsg = document.getElementById('emptyMsg');
 
+  // Fix 1.3 — grab CSRF token once for dynamic forms
+  var csrfMeta  = document.querySelector('meta[name="csrf-token"]');
+  var csrfToken = csrfMeta ? csrfMeta.getAttribute('content') : '';
+
   if(box) box.scrollTop = box.scrollHeight;
 
   if(inp){
@@ -125,35 +129,77 @@
   var socket = io({ transports: ['websocket','polling'] });
   socket.on('connect', function(){ socket.emit('join', { room: ROOM }); });
 
+  // Fix 1.8 — build message bubbles with DOM API; no innerHTML for user data.
+  var IMAGE_EXTS = ['png','jpg','jpeg','gif','webp','bmp'];
+  var AUDIO_EXTS = ['mp3','wav','m4a','ogg','oga','aac'];
+
+  function makeText(tag, cls, text){
+    var el = document.createElement(tag);
+    if(cls) el.className = cls;
+    el.textContent = text;
+    return el;
+  }
+
   socket.on('new_message', function(m){
     if(emptyMsg){ emptyMsg.remove(); emptyMsg=null; }
     var align = (m.sender===ME) ? 'me' : 'them';
-    var mediaHtml='';
-    if(m.ftype==='file'&&m.url){
+
+    var bubble = document.createElement('div');
+    bubble.className = 'msg-bubble ' + align;
+    bubble.dataset.id = m.id || '';
+
+    // Author + time
+    var author = document.createElement('div');
+    author.className = 'msg-author';
+    author.textContent = m.sender;           // textContent — safe
+    var tspan = document.createElement('span');
+    tspan.className = 'msg-time';
+    tspan.textContent = m.time;
+    author.appendChild(tspan);
+    bubble.appendChild(author);
+
+    // Media attachment
+    if(m.ftype==='file' && m.url){
       var ext=(m.filename||'').split('.').pop().toLowerCase();
-      var imgX=['png','jpg','jpeg','gif','webp','bmp'];
-      var audX=['mp3','wav','m4a','ogg','oga','aac'];
-      if(imgX.indexOf(ext)!==-1)
-        mediaHtml='<div class="image-box"><a href="'+m.url+'" target="_blank"><img src="'+m.url+'"></a></div>';
-      else if(audX.indexOf(ext)!==-1)
-        mediaHtml='<div class="voice-box"><audio controls preload="none"><source src="'+m.url+'"></audio></div>';
-      else
-        mediaHtml='<div class="msg-file"><a href="'+m.url+'" target="_blank">'+m.filename+'</a></div>';
+      var mediaDiv = document.createElement('div');
+      if(IMAGE_EXTS.indexOf(ext)!==-1){
+        mediaDiv.className='image-box';
+        var a=document.createElement('a'); a.href=m.url; a.target='_blank';
+        var img=document.createElement('img'); img.src=m.url;
+        a.appendChild(img); mediaDiv.appendChild(a);
+      } else if(AUDIO_EXTS.indexOf(ext)!==-1){
+        mediaDiv.className='voice-box';
+        var audio=document.createElement('audio'); audio.controls=true; audio.preload='none';
+        var src=document.createElement('source'); src.src=m.url;
+        audio.appendChild(src); mediaDiv.appendChild(audio);
+      } else {
+        mediaDiv.className='msg-file';
+        var a=document.createElement('a'); a.href=m.url; a.target='_blank';
+        a.textContent=m.filename;            // textContent — safe
+        mediaDiv.appendChild(a);
+      }
+      bubble.appendChild(mediaDiv);
     }
+
+    bubble.appendChild(makeText('div','msg-text', m.text||''));  // textContent — safe
+
     var row=document.createElement('div');
     row.className='msg-row';
-    row.innerHTML='<div class="msg-bubble '+align+'" data-id="'+m.id+'">'
-      +'<div class="msg-author">'+m.sender+'<span class="msg-time">'+m.time+'</span></div>'
-      +mediaHtml
-      +'<div class="msg-text">'+(m.text||'')+'</div>'
-      +'</div>';
+    row.appendChild(bubble);
     box.insertBefore(row, typingEl);
     box.scrollTop=box.scrollHeight;
   });
 
   socket.on('typing', function(data){
     if(data.sender===ME) return;
-    if(typingName) typingName.innerHTML=data.sender+' <span class="msg-time">typing…</span>';
+    // Fix 1.8 — use textContent, not innerHTML, for the sender name
+    if(typingName){
+      typingName.textContent = data.sender + ' ';
+      var tspan = document.createElement('span');
+      tspan.className = 'msg-time';
+      tspan.textContent = 'typing…';
+      typingName.appendChild(tspan);
+    }
     if(typingEl) typingEl.style.display='';
     box.scrollTop=box.scrollHeight;
     clearTimeout(typingTimer);
@@ -162,7 +208,7 @@
 
   if(inp){
     inp.addEventListener('input', function(){
-      socket.emit('typing', { room: ROOM, sender: ME });
+      socket.emit('typing', { room: ROOM });  // Fix 1.7 — server reads sender from session
     });
   }
 
@@ -180,7 +226,10 @@
       var f=document.createElement('form'); f.method='post'; f.style.display='none';
       var a1=document.createElement('input'); a1.name='action'; a1.value='set_reply';
       var a2=document.createElement('input'); a2.name='msg_index'; a2.value=idx;
-      f.appendChild(a1); f.appendChild(a2); document.body.appendChild(f); f.submit();
+      // Fix 1.3 — inject CSRF token into dynamically submitted form
+      var csrf=document.createElement('input'); csrf.type='hidden'; csrf.name='csrf_token'; csrf.value=csrfToken;
+      f.appendChild(a1); f.appendChild(a2); f.appendChild(csrf);
+      document.body.appendChild(f); f.submit();
     }
   },{passive:true});
 
