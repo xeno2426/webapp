@@ -14,21 +14,30 @@
 <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;">
   <p style="font-weight:500;margin:0;">Saved notes ({{ note_count }})</p>
   <div style="display:flex;gap:6px;align-items:center;">
-    <a href="/?sort=newest" class="btn-small {% if sort != 'newest' %}outline{% endif %}" style="font-size:11px;">Newest</a>
-    <a href="/?sort=oldest" class="btn-small {% if sort != 'oldest' %}outline{% endif %}" style="font-size:11px;">Oldest</a>
+    <a href="/?sort=newest{% if q %}&q={{ q | urlencode }}{% endif %}"
+       class="btn-small {% if sort != 'newest' %}outline{% endif %}" style="font-size:11px;">Newest</a>
+    <a href="/?sort=oldest{% if q %}&q={{ q | urlencode }}{% endif %}"
+       class="btn-small {% if sort != 'oldest' %}outline{% endif %}" style="font-size:11px;">Oldest</a>
   </div>
 </div>
 
 <p><a href="/note/new" class="link">+ New full note</a></p>
 
-<input id="noteSearch" placeholder="Search notes..." oninput="filterNotes(this.value)" style="margin-bottom:8px;">
+{# Fix 5.3 — search is now server-side via GET param; no data-body in HTML #}
+<form method="get" action="/" style="margin-bottom:8px;">
+  {% if sort != 'newest' %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+  <input name="q" placeholder="Search notes..." value="{{ q }}"
+         style="margin-bottom:0;" autocomplete="off">
+  {% if q %}
+  <a href="/?sort={{ sort }}" class="btn-small outline" style="font-size:11px;margin-left:4px;">✕ Clear</a>
+  {% endif %}
+</form>
 
 <div id="notesList">
 {% if notes %}
   {% for n in notes %}
-  <div class="note-card"
-       data-title="{{ n.title | lower }}"
-       data-body="{{ n.body | lower }}">
+  {# Fix 5.3 — data-body removed; note bodies are not exposed in HTML attributes #}
+  <div class="note-card">
     <div class="note-title">{{ n.title }}</div>
     <div class="note-time">{{ n.time }}</div>
     <div class="note-body" style="white-space:pre-wrap;">{{ n.body }}</div>
@@ -43,19 +52,9 @@
   </div>
   {% endfor %}
 {% else %}
-  <p style="font-size:13px;color:#64748b;">No notes yet.</p>
+  <p style="font-size:13px;color:#64748b;">
+    {% if q %}No notes matched "{{ q }}".{% else %}No notes yet.{% endif %}
+  </p>
 {% endif %}
 </div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-function filterNotes(q){
-  q = q.toLowerCase();
-  document.querySelectorAll('#notesList .note-card').forEach(function(c){
-    var t = (c.getAttribute('data-title')||'') + ' ' + (c.getAttribute('data-body')||'');
-    c.style.display = t.includes(q) ? '' : 'none';
-  });
-}
-</script>
 {% endblock %}
