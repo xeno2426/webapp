@@ -297,7 +297,7 @@ def on_typing(data):
 
 # ---------- AUTH ----------
 @app.route("/signup", methods=["GET","POST"])
-@limiter.limit("5 per hour")   # Fix 4.3 — prevent signup spam
+@limiter.limit("20 per hour")   # Fix 4.3 — prevent signup spam
 def signup():
     if current_user(): return redirect("/")
     error = ""
