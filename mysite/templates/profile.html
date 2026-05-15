@@ -1,6 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Profile · Xeno WebApp{% endblock %}
+{% block title %}Profile · Xeno{% endblock %}
 {% block content %}
+<div class="page-body">
+
 <h1>Profile</h1>
 <p>Manage your profile, avatar and security.</p>
 
@@ -14,15 +16,15 @@
 <form method="post" enctype="multipart/form-data">
   <input type="hidden" name="action" value="avatar">
   <input type="file" name="avatar" accept="image/png,image/jpeg,image/gif,image/webp">
-  <p style="font-size:11px;color:#64748b;margin-top:-6px;">PNG/JPG/GIF/WEBP · max 5MB</p>
+  <p style="font-size:11px;color:var(--text-dim);margin-top:-8px;">PNG / JPG / GIF / WEBP · max 5 MB</p>
   <button class="btn2" type="submit">Upload avatar</button>
 </form>
 
 <form method="post" style="margin-top:12px;">
   <input type="hidden" name="action" value="update_bio">
-  <textarea name="bio" placeholder="Your bio..." maxlength="400"
+  <textarea name="bio" placeholder="Your bio…" maxlength="400"
     oninput="document.getElementById('bioCount').textContent=this.value.length+'/400'">{{ info.bio or '' }}</textarea>
-  <p style="font-size:11px;color:#64748b;text-align:right;margin-top:-8px;" id="bioCount">{{ bio_len }}/400</p>
+  <p style="font-size:11px;color:var(--text-dim);text-align:right;margin-top:-8px;" id="bioCount">{{ bio_len }}/400</p>
   <button class="btn2" type="submit">Save bio</button>
 </form>
 
@@ -40,12 +42,15 @@
   <button class="btn2" type="submit">Change password</button>
 </form>
 
-<hr style="border-color:#1f2937;margin:18px 0;">
-<p style="font-size:13px;font-weight:600;color:#ef4444;">Danger Zone</p>
-<p style="font-size:12px;color:#64748b;">This permanently deletes your account, messages and data.</p>
+<hr>
+<p style="font-size:13px;font-weight:600;color:var(--danger);">Danger Zone</p>
+<p style="font-size:12px;color:var(--text-dim);">This permanently deletes your account, messages and data.</p>
 <form method="post" onsubmit="return confirm('Are you absolutely sure? This cannot be undone.');">
   <input type="hidden" name="action" value="delete_account">
   <input name="confirm_delete" placeholder="Type your username to confirm">
-  <button class="btn2" type="submit" style="color:#ef4444;border-color:#ef4444;margin-top:6px;">Delete my account</button>
+  <button class="btn2" type="submit"
+          style="color:var(--danger);border-color:var(--danger);margin-top:6px;">Delete my account</button>
 </form>
+
+</div>
 {% endblock %}

@@ -1,31 +1,43 @@
 {% extends "base.html" %}
-{% block title %}Groups · Xeno WebApp{% endblock %}
+{% block title %}Groups · Xeno{% endblock %}
 {% block content %}
+<div class="page-body">
+
 <h1>Groups</h1>
 <p>Your group chats.</p>
 
-<form action="/group/create">
-  <button class="btn">Create New Group</button>
+<form action="/group/create" style="margin-bottom:16px;">
+  <button class="btn" type="submit">+ Create New Group</button>
 </form>
 
 {% if groups %}
   {% for g in groups %}
   <div class="friend-card">
-    <div>
+    <div style="display:flex;align-items:center;gap:8px;">
       {% if g.avatar %}
         <img src="{{ g.avatar }}" class="group-avatar">
+      {% else %}
+        <span style="width:24px;height:24px;border-radius:999px;background:var(--surface-3);
+                     display:inline-flex;align-items:center;justify-content:center;
+                     font-size:12px;">💬</span>
       {% endif %}
-      <strong>{{ g.name }}</strong>
-      <small> · {{ g.member_count }} members</small>
+      <div>
+        <strong>{{ g.name }}</strong>
+        <small style="display:block;color:var(--text-dim);font-size:11px;">{{ g.member_count }} member{{ 's' if g.member_count != 1 }}</small>
+      </div>
     </div>
-    <div>
-      <form method="get" action="/group/{{ g.id }}">
-        <button class="btn-small" type="submit">Open</button>
-      </form>
-    </div>
+    <form method="get" action="/group/{{ g.id }}">
+      <button class="btn-small" type="submit">Open</button>
+    </form>
   </div>
   {% endfor %}
 {% else %}
-  <p style="color:#64748b;">No groups yet.</p>
+  <div class="empty-state">
+    <div class="empty-icon">💬</div>
+    <div class="empty-title">No groups yet</div>
+    <div class="empty-sub">Create a group to start chatting with multiple friends at once.</div>
+  </div>
 {% endif %}
+
+</div>
 {% endblock %}

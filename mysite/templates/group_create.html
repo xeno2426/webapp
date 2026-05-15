@@ -1,16 +1,26 @@
 {% extends "base.html" %}
-{% block title %}Create Group · Xeno WebApp{% endblock %}
+{% block title %}Create Group · Xeno{% endblock %}
 {% block content %}
+<div class="page-body">
+
 <h1>Create Group</h1>
+<p>Set a name, add friends, and optionally pick a group photo.</p>
+
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
 <form method="post" enctype="multipart/form-data">
   <input name="name" placeholder="Group name" required>
-  <input name="members" placeholder="Usernames (comma separated)">
+  <input name="members" placeholder="Usernames, comma separated (e.g. alice, bob)"
+         autocorrect="off" autocapitalize="off">
+  <p style="font-size:12px;color:var(--text-dim);margin-top:-8px;">You can add more members later.</p>
   <div style="margin-top:8px;">
-    <span style="font-size:12px;color:#9ca3af;">Group profile photo (optional)</span><br>
-    <input type="file" name="avatar">
+    <span style="font-size:12px;color:var(--text-muted);">Group photo (optional)</span><br>
+    <input type="file" name="avatar" accept="image/*" style="margin-top:6px;">
   </div>
-  <button class="btn" type="submit" style="margin-top:10px;">Create Group</button>
+  <button class="btn" type="submit" style="margin-top:14px;">Create Group</button>
 </form>
-<p><a href="/groups" class="link">Back to Groups</a></p>
+
+<p style="margin-top:12px;"><a href="/groups" class="link">← Back to Groups</a></p>
+
+</div>
 {% endblock %}

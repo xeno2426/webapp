@@ -1,83 +1,76 @@
 {% extends "base.html" %}
-{% block title %}Admin · {{ group.name }} · Xeno WebApp{% endblock %}
+{% block title %}Admin · {{ group.name }} · Xeno{% endblock %}
 {% block content %}
+<div class="page-body">
+
 <h1>
-  {% if avatar_url %}<img src="{{ avatar_url }}" class="group-avatar-large">{% endif %}
+  {% if avatar_url %}<img src="{{ avatar_url }}" class="group-avatar-large" alt="">{% endif %}
   {{ group.name }}
 </h1>
 <p>Group admin · manage members and settings.</p>
 
-{% if error %}<p style="color:#f97373;font-size:13px;margin-bottom:8px;">{{ error }}</p>{% endif %}
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
 
-<h2>Add to group</h2>
-<form method="post" style="margin-bottom:14px;">
+<h2>Add member</h2>
+<form method="post" style="margin-bottom:16px;">
   <input type="hidden" name="action" value="add_member">
-  <input name="username" placeholder="Username to add">
-  <button class="btn" type="submit" style="margin-top:8px;">Add to group</button>
+  <input name="username" placeholder="Username to add"
+         autocorrect="off" autocapitalize="off">
+  <button class="btn" type="submit" style="margin-top:4px;">Add to group</button>
 </form>
 
-<h2>Members</h2>
+<h2>Members ({{ members|length }})</h2>
 {% for m in members %}
 <div class="friend-card">
   <div>
-    @{{ m.username }}{% if m.is_owner %} <small>(owner)</small>{% endif %}
+    <strong>@{{ m.username }}</strong>
+    {% if m.is_owner %}<small style="color:var(--pink-mid);"> · owner</small>{% endif %}
   </div>
-  <div>
-    {% if not m.is_owner %}
-    <form id="removeForm_{{ m.username }}" method="post" style="display:inline;">
-      <input type="hidden" name="action" value="remove_member">
-      <input type="hidden" name="member" value="{{ m.username }}">
-      <button class="btn-danger" type="button"
-              onclick="openRemoveModal('{{ m.username }}')">Remove</button>
-    </form>
-    {% endif %}
-  </div>
+  {% if not m.is_owner %}
+  <form id="removeForm_{{ m.username }}" method="post" style="display:inline;">
+    <input type="hidden" name="action" value="remove_member">
+    <input type="hidden" name="member" value="{{ m.username }}">
+    <button class="btn-small danger" type="button"
+            onclick="confirmRemove('{{ m.username }}')">Remove</button>
+  </form>
+  {% endif %}
 </div>
 {% endfor %}
 
-<h2>Danger zone</h2>
+<hr style="margin-top:24px;">
+<p style="font-size:13px;font-weight:600;color:var(--danger);">Danger Zone</p>
+<p style="font-size:12px;color:var(--text-dim);">Permanently deletes the group and all its messages.</p>
 <form id="deleteGroupForm" method="post">
   <input type="hidden" name="action" value="delete_group">
-  <button class="btn-danger" type="button" onclick="openGroupDeleteModal()">Delete group</button>
+  <button class="btn-danger" type="button" onclick="confirmDeleteGroup()"
+          style="width:100%;padding:10px;">Delete group</button>
 </form>
 
-<p style="margin-top:10px;">
-  <a href="/group/{{ group_id }}" class="link">Back to group chat</a>
+<p style="margin-top:16px;">
+  <a href="/group/{{ group_id }}" class="link">← Back to group chat</a>
 </p>
 
-<!-- Remove member modal -->
-<div class="gconfirm-overlay" id="removeOverlay">
-  <div class="gconfirm-box">
-    <div class="gconfirm-title">Remove member?</div>
-    <div class="gconfirm-text" id="removeText">Are you sure?</div>
-    <div class="gconfirm-buttons">
-      <button type="button" class="btn2" onclick="closeRemoveModal()">Cancel</button>
-      <button type="button" class="btn-danger" onclick="submitRemove()">Remove</button>
-    </div>
-  </div>
-</div>
-
-<!-- Delete group modal -->
-<div class="gconfirm-overlay" id="groupDeleteOverlay">
-  <div class="gconfirm-box">
-    <div class="gconfirm-title">Delete group?</div>
-    <div class="gconfirm-text">Delete this group and all its messages? Cannot be undone.</div>
-    <div class="gconfirm-buttons">
-      <button type="button" class="btn2" onclick="closeGroupDeleteModal()">Cancel</button>
-      <button type="button" class="btn-danger" onclick="submitGroupDelete()">Delete</button>
-    </div>
-  </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-var currentRemoveUser = null;
-function openRemoveModal(u){ currentRemoveUser=u; document.getElementById('removeText').textContent='Remove @'+u+' from the group?'; document.getElementById('removeOverlay').style.display='flex'; }
-function closeRemoveModal(){ document.getElementById('removeOverlay').style.display='none'; currentRemoveUser=null; }
-function submitRemove(){ if(currentRemoveUser){ document.getElementById('removeForm_'+currentRemoveUser).submit(); } }
-function openGroupDeleteModal(){ document.getElementById('groupDeleteOverlay').style.display='flex'; }
-function closeGroupDeleteModal(){ document.getElementById('groupDeleteOverlay').style.display='none'; }
-function submitGroupDelete(){ document.getElementById('deleteGroupForm').submit(); }
+function confirmRemove(username) {
+  document.getElementById('confirmTitle').textContent = 'Remove @' + username + '?';
+  document.getElementById('confirmBody').textContent  = 'They will be removed from the group.';
+  document.getElementById('confirmYes').onclick = function () {
+    document.getElementById('removeForm_' + username).submit();
+  };
+  document.getElementById('confirmModal').style.display = 'flex';
+}
+
+function confirmDeleteGroup() {
+  document.getElementById('confirmTitle').textContent = 'Delete this group?';
+  document.getElementById('confirmBody').textContent  = 'All messages will be permanently deleted. This cannot be undone.';
+  document.getElementById('confirmYes').onclick = function () {
+    document.getElementById('deleteGroupForm').submit();
+  };
+  document.getElementById('confirmModal').style.display = 'flex';
+}
 </script>
 {% endblock %}
