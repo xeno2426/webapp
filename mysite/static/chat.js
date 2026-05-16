@@ -9,8 +9,14 @@ var socket = window._xenoSocket;
 var typingTimer = null;
 
 if (socket) {
-  // Join the chat room (personal room already joined by app.js)
-  socket.emit('join', { room: CHAT_ROOM });
+  // Join chat room — wait for connection to be ready
+  if (socket.connected) {
+    socket.emit('join', { room: CHAT_ROOM });
+  } else {
+    socket.on('connect', function () {
+      socket.emit('join', { room: CHAT_ROOM });
+    });
+  }
 
   // ── Incoming message ──────────────────────────────────────────
   socket.on('new_message', function (m) {
