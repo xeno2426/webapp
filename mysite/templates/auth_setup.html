@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Set up your account · Xeno{% endblock %}
+{% block content %}
+<div class="page-body" style="max-width:420px;display:flex;flex-direction:column;justify-content:center;min-height:100%;">
+
+  <div style="font-size:48px;text-align:center;margin-bottom:8px;">🌸</div>
+  <h1 style="text-align:center;">One last step</h1>
+  <p style="text-align:center;margin-bottom:20px;">
+    {% if given_name %}Hey {{ given_name }}! {% endif %}
+    Choose a username and set a recovery phrase for your Xeno account.
+  </p>
+
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+  <form method="post">
+    <label style="font-size:12px;color:var(--text-muted);font-weight:600;display:block;margin-bottom:4px;">Username</label>
+    <input type="text" name="username" placeholder="e.g. rosepetal_99"
+           autocomplete="username" autocorrect="off" autocapitalize="off"
+           maxlength="30" required>
+    <p style="font-size:11px;color:var(--text-dim);margin-top:-8px;margin-bottom:12px;">
+      Letters, numbers, hyphens, underscores. Min 3 characters.
+    </p>
+
+    <label style="font-size:12px;color:var(--text-muted);font-weight:600;display:block;margin-bottom:4px;">Recovery phrase</label>
+    <input type="password" name="recovery"
+           placeholder="Something only you know…"
+           autocomplete="new-password" minlength="6" required>
+    <p style="font-size:11px;color:var(--text-dim);margin-top:-8px;margin-bottom:16px;">
+      Used to reset your account if you lose access. Min 6 characters.
+    </p>
+
+    <button type="submit" class="btn">✨ Create my account</button>
+  </form>
+
+</div>
+{% endblock %}

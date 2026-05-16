@@ -8,15 +8,14 @@
 var socket = window._xenoSocket;
 var typingTimer = null;
 
+function joinChatRoom() {
+  if (socket && CHAT_ROOM) socket.emit('join', { room: CHAT_ROOM });
+}
+
 if (socket) {
-  // Join chat room — wait for connection to be ready
-  if (socket.connected) {
-    socket.emit('join', { room: CHAT_ROOM });
-  } else {
-    socket.on('connect', function () {
-      socket.emit('join', { room: CHAT_ROOM });
-    });
-  }
+  if (socket.connected) { joinChatRoom(); }
+  socket.on('connect',   function () { joinChatRoom(); });
+  socket.on('reconnect', function () { joinChatRoom(); });
 
   // ── Incoming message ──────────────────────────────────────────
   socket.on('new_message', function (m) {
@@ -30,6 +29,7 @@ if (socket) {
       box.insertBefore(row, typing);
       scrollToBottom();
     }
+    markSeen();
   });
 
   // ── Typing indicator ──────────────────────────────────────────
@@ -51,6 +51,12 @@ if (socket) {
       el.textContent = '✓✓';
     });
   });
+}
+
+// Mark messages seen without reloading
+function markSeen() {
+  fetch(window.location.pathname + '?mark_seen=1', { method: 'GET' })
+    .catch(function () {});
 }
 
 // ── Build a new message bubble (for socket new_message) ──────────

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Signing in… · Xeno</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #1a0f14;
+      color: #fdfaf7;
+      font-family: system-ui, -apple-system, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .spinner {
+      width: 44px; height: 44px;
+      border-radius: 50%;
+      border: 3px solid #5a3040;
+      border-top-color: #e8829a;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    p { color: #c9a8b4; font-size: 14px; }
+    .logo { font-size: 36px; }
+  </style>
+</head>
+<body>
+  <div class="logo">🌸</div>
+  <div class="spinner"></div>
+  <p>Finishing sign-in…</p>
+
+  <script>
+    // Supabase puts the access_token in the URL fragment (#access_token=...)
+    // Fragments never reach the server, so we read it here and POST it.
+    var hash   = window.location.hash.substring(1);
+    var params = new URLSearchParams(hash);
+    var token  = params.get('access_token');
+
+    if (!token) {
+      window.location.href = '/login?error=no_token';
+    } else {
+      fetch('/auth/callback/verify', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ access_token: token })
+      })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        window.location.href = data.redirect || '/login?error=auth_failed';
+      })
+      .catch(function () {
+        window.location.href = '/login?error=network';
+      });
+    }
+  </script>
+</body>
+</html>

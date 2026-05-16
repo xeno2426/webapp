@@ -1,10 +1,10 @@
-from flask import Flask, request, redirect, session, send_from_directory, jsonify, render_template
+from flask import Flask, request, redirect, session, send_from_directory, jsonify, render_template, url_for
 from flask_socketio import SocketIO, join_room, emit as socket_emit
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect   # Fix 1.3
 from datetime import datetime, timedelta, timezone
-import os, json, hashlib, base64, secrets, sys, hmac, logging, uuid
+import os, json, hashlib, base64, secrets, sys, hmac, logging, uuid, urllib.parse
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -25,6 +25,8 @@ SECRET_KEY        = os.environ.get("SECRET_KEY")
 ADMIN_KEY         = os.environ.get("ADMIN_KEY")
 SECRET_MASTER_KEY = os.environ.get("MASTER_KEY")
 APP_URL           = os.environ.get("APP_URL", "https://webapp-i3ht.onrender.com")
+SUPABASE_URL      = os.environ.get("SUPABASE_URL", "")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
 
 for _name, _val in [("SECRET_KEY", SECRET_KEY), ("ADMIN_KEY", ADMIN_KEY), ("MASTER_KEY", SECRET_MASTER_KEY)]:
     if not _val:
@@ -38,6 +40,17 @@ app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 # Fix 6.4 — async_mode matches the eventlet worker class in Procfile.
 socketio = SocketIO(app, cors_allowed_origins=[APP_URL], async_mode="eventlet",
                     logger=False, engineio_logger=False)
+
+# ── Speed: cache static files 7 days, never cache HTML pages ────
+@app.after_request
+def set_cache_headers(response):
+    if request.path.startswith("/static/"):
+        response.cache_control.max_age = 604800
+        response.cache_control.public  = True
+    else:
+        response.cache_control.no_store = True
+    return response
+
 
 # Fix 4.3 — enable sensible global rate limits; tighter limits applied per-route below.
 limiter  = Limiter(get_remote_address, app=app, default_limits=["300 per day", "60 per hour"])
@@ -331,63 +344,109 @@ def on_typing(data):
         socket_emit("typing", {"sender": me}, to=room, include_self=False)
 
 
-# ---------- C2: WEBRTC SIGNALLING ----------
+# ---------- D2: GOOGLE OAUTH ----------
 
-@socketio.on("connect")
-def on_connect():
-    """Auto-join personal room on every socket connect.
-    Complements the explicit 'join' emit from app.js —
-    ensures call signals reach the user on ANY page, not just chat."""
-    me = session.get("user")
-    if me:
-        join_room(f"user_{me}")
+@app.route("/auth/google")
+def auth_google():
+    """Redirect user to Supabase Google OAuth URL."""
+    if not SUPABASE_URL:
+        return redirect("/login")
+    params = {
+        "provider":    "google",
+        "redirect_to": url_for("auth_callback", _external=True)
+    }
+    url = f"{SUPABASE_URL}/auth/v1/authorize?{urllib.parse.urlencode(params)}"
+    return redirect(url)
 
-@socketio.on("call_offer")
-def on_call_offer(data):
-    me = session.get("user")
-    to = data.get("to")
-    if not me or not to or not db.are_friends(me, to):
-        return
-    user_info = db.get_user(me) or {}
-    socketio.emit("call_offer", {
-        "from":        me,
-        "sdp":         data.get("sdp"),
-        "from_avatar": user_info.get("avatar", "")
-    }, to=f"user_{to}")
+@app.route("/auth/callback")
+def auth_callback():
+    """Supabase redirects here with access_token in URL fragment.
+    Fragments never reach the server — serve a page that reads it and POSTs it."""
+    return render_template("auth_callback.html")
 
-@socketio.on("call_answer")
-def on_call_answer(data):
-    me = session.get("user")
-    to = data.get("to")
-    if not me or not to: return
-    socketio.emit("call_answer", {
-        "from": me,
-        "sdp":  data.get("sdp")
-    }, to=f"user_{to}")
+@app.route("/auth/callback/verify", methods=["POST"])
+@csrf.exempt   # Called from fetch() in auth_callback.html (no form)
+def auth_callback_verify():
+    """Validates access_token from Google OAuth fragment."""
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        return jsonify({"error": "Google auth not configured"}), 503
 
-@socketio.on("ice_candidate")
-def on_ice_candidate(data):
-    me = session.get("user")
-    to = data.get("to")
-    if not me or not to: return
-    socketio.emit("ice_candidate", {
-        "from":      me,
-        "candidate": data.get("candidate")
-    }, to=f"user_{to}")
+    import requests as _http
+    token = (request.json or {}).get("access_token")
+    if not token:
+        return jsonify({"error": "No token"}), 400
 
-@socketio.on("call_end")
-def on_call_end(data):
-    me = session.get("user")
-    to = data.get("to")
-    if not me or not to: return
-    socketio.emit("call_end", {"from": me}, to=f"user_{to}")
+    r = _http.get(
+        f"{SUPABASE_URL}/auth/v1/user",
+        headers={"Authorization": f"Bearer {token}",
+                 "apikey": SUPABASE_ANON_KEY},
+        timeout=8
+    )
+    if r.status_code != 200:
+        return jsonify({"error": "Invalid token"}), 401
 
-@socketio.on("call_busy")
-def on_call_busy(data):
-    me = session.get("user")
-    to = data.get("to")
-    if not me or not to: return
-    socketio.emit("call_busy", {"from": me}, to=f"user_{to}")
+    user_data  = r.json()
+    email      = user_data.get("email")
+    google_id  = user_data.get("id")
+    meta       = user_data.get("user_metadata") or {}
+    given_name = meta.get("full_name", "")
+    avatar_url = meta.get("avatar_url", "")
+
+    if not email:
+        return jsonify({"error": "No email returned"}), 400
+
+    existing = db.get_user_by_email(email)
+    if existing:
+        session["user"] = existing["username"]
+        return jsonify({"redirect": "/"})
+    else:
+        session["google_pending"] = {
+            "email":      email,
+            "google_id":  google_id,
+            "given_name": given_name,
+            "avatar":     avatar_url
+        }
+        return jsonify({"redirect": "/auth/setup"})
+
+@app.route("/auth/setup", methods=["GET", "POST"])
+def auth_setup():
+    """New Google users pick username + recovery phrase here."""
+    pending = session.get("google_pending")
+    if not pending:
+        return redirect("/login")
+
+    error = None
+    if request.method == "POST":
+        username = request.form.get("username", "").strip().lower()
+        recovery = request.form.get("recovery", "").strip()
+
+        if not username or not recovery:
+            error = "Both fields are required."
+        elif len(username) < 3:
+            error = "Username must be at least 3 characters."
+        elif not username.replace("_", "").replace("-", "").isalnum():
+            error = "Username can only contain letters, numbers, hyphens, underscores."
+        elif len(recovery) < 6:
+            error = "Recovery phrase must be at least 6 characters."
+        elif db.get_user(username):
+            error = "That username is already taken."
+        else:
+            db.create_user(
+                username,
+                password_hash="",
+                recovery=generate_password_hash(recovery),
+                email=pending["email"],
+                google_id=pending["google_id"],
+                auth_provider="google",
+                avatar=pending.get("avatar", "")
+            )
+            session.pop("google_pending", None)
+            session["user"] = username
+            return redirect("/")
+
+    return render_template("auth_setup.html",
+                           given_name=pending.get("given_name", ""),
+                           error=error)
 
 # ---------- AUTH ----------
 @app.route("/signup", methods=["GET","POST"])
@@ -740,6 +799,8 @@ def chat(friend):
     # GET
     db.mark_seen(friend, me)
     db.reset_unread(me, friend)
+    # Push seen_update so friend's tick turns green immediately
+    socketio.emit("seen_update", {"from": me}, to=dm_room(me, friend))
     chat_data = db.load_chat(me, friend)
     # normalise key name for build_messages
     for m in chat_data:
@@ -998,6 +1059,7 @@ def group_chat(group_id):
         return redirect(f"/group/{group_id}")
 
     db.mark_group_seen(group_id, me)
+    socketio.emit("seen_update", {"from": me}, to=group_room(group_id))
     chat_data = db.load_group_chat(group_id)
     for m in chat_data:
         if "sender" in m and "from" not in m: m["from"] = m["sender"]

@@ -36,9 +36,23 @@ async function startCall(friend) {
   isCaller   = true;
 
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (navigator.permissions) {
+      var permResult = await navigator.permissions.query({ name: 'microphone' });
+      if (permResult.state === 'denied') {
+        showMicDeniedModal();
+        callTarget = null; isCaller = false;
+        return;
+      }
+    }
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
   } catch (e) {
-    showCallToast('Microphone access denied.');
+    if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+      showMicDeniedModal();
+    } else if (e.name === 'NotFoundError') {
+      showCallToast('No microphone found on this device.');
+    } else {
+      showCallToast('Could not access microphone: ' + e.message);
+    }
     callTarget = null; isCaller = false;
     return;
   }
@@ -258,6 +272,31 @@ function declineCall(from) {
   if (sock) sock.emit('call_end', { to: from });
   _pendingOffer = null;
   dismissIncomingCall();
+}
+
+// ── Microphone permission modal ───────────────────────────────────
+function showMicDeniedModal() {
+  var ex = document.getElementById('micDeniedModal');
+  if (ex) ex.remove();
+  var overlay = document.createElement('div');
+  overlay.id = 'micDeniedModal';
+  overlay.className = 'call-overlay';
+  overlay.style.zIndex = '1200';
+  overlay.innerHTML =
+    '<div class="call-overlay-inner" style="max-width:300px;text-align:center;">' +
+      '<div style="font-size:52px;">🎤</div>' +
+      '<div class="call-name" style="font-size:18px;">Microphone Required</div>' +
+      '<div class="call-status" style="line-height:1.7;margin-top:6px;">' +
+        'Xeno needs your microphone for voice calls.<br><br>' +
+        'Tap the <strong>🔒 lock icon</strong> in your browser bar<br>' +
+        '→ Site settings → Microphone → Allow<br>' +
+        'then reload the page.' +
+      '</div>' +
+      '<button class="call-end-btn" style="width:auto;border-radius:999px;' +
+        'padding:10px 24px;font-size:14px;margin-top:4px;" ' +
+        'onclick="document.getElementById('micDeniedModal').remove()">Dismiss</button>' +
+    '</div>';
+  document.body.appendChild(overlay);
 }
 
 // ── Toast notification ────────────────────────────────────────────
