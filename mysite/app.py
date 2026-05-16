@@ -46,6 +46,7 @@ limiter  = Limiter(get_remote_address, app=app, default_limits=["300 per day", "
 # Routes that are called by JS fetch() with no form are exempted below via @csrf.exempt.
 csrf = CSRFProtect(app)
 app.config["WTF_CSRF_TIME_LIMIT"] = None  # Never expire CSRF token
+app.config["WTF_CSRF_SSL_STRICT"] = False  # Allow Brave/strict browsers
 
 # ---------- INIT DB ON STARTUP ----------
 with app.app_context():
