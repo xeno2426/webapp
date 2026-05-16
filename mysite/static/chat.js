@@ -441,3 +441,24 @@ function getCsrf() {
   var meta = document.querySelector('meta[name="csrf-token"]');
   return meta ? meta.getAttribute('content') : '';
 }
+
+// ── AJAX send — no page reload ────────────────────────────────────
+document.addEventListener('DOMContentLoaded', function () {
+  var form = document.getElementById('sendForm');
+  if (!form) return;
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var inp  = document.getElementById('msgInput');
+    var text = inp ? inp.value.trim() : '';
+    if (!text) return;
+    var data = new FormData(form);
+    inp.value = '';
+    cancelReply();
+    fetch(window.location.pathname, {
+      method:  'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest',
+                 'X-CSRFToken': getCsrf() },
+      body: data
+    }).catch(function () { form.submit(); });
+  });
+});

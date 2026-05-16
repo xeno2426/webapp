@@ -672,6 +672,8 @@ def chat(friend):
             except Exception: mid = -1
             emoji = request.form.get("emoji","❤️")
             if mid > 0: db.react_message(mid, me, emoji)
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return jsonify({"ok": True})
         return redirect(f"/chat/{friend}")
 
     # GET
