@@ -45,6 +45,7 @@ limiter  = Limiter(get_remote_address, app=app, default_limits=["300 per day", "
 # Fix 1.3 — CSRF protection on all state-changing POST routes.
 # Routes that are called by JS fetch() with no form are exempted below via @csrf.exempt.
 csrf = CSRFProtect(app)
+app.config["WTF_CSRF_TIME_LIMIT"] = None  # Never expire CSRF token
 
 # ---------- INIT DB ON STARTUP ----------
 with app.app_context():
