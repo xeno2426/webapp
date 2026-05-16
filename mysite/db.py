@@ -153,21 +153,10 @@ def get_users_bulk(usernames):
     rows = query("SELECT * FROM users WHERE username = ANY(%s)", (list(usernames),))
     return {r["username"]: r for r in rows}
 
-def create_user(username, password_hash, bio="", avatar="", recovery="",
-                email="", google_id="", auth_provider="local"):
-    """Create a new user. Works for both local and Google auth."""
-    execute("""
-        INSERT INTO users
-          (username, password_hash, bio, avatar, recovery,
-           email, google_id, auth_provider, created_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
-        ON CONFLICT(username) DO NOTHING
-    """, (username, password_hash or "", bio, avatar, recovery,
-          email, google_id, auth_provider))
-
-def get_user_by_email(email):
-    """Look up a user by email address (used by Google OAuth flow)."""
-    return query("SELECT * FROM users WHERE email=%s", (email,), one=True)
+def create_user(username, password_hash, bio="", avatar="", recovery=""):
+    execute("INSERT INTO users(username,password_hash,bio,avatar,recovery) "
+            "VALUES(%s,%s,%s,%s,%s) ON CONFLICT(username) DO NOTHING",
+            (username, password_hash, bio, avatar, recovery))
 
 def update_user(username, **kwargs):
     ALLOWED = {"password_hash","bio","avatar","recovery","last_seen",
@@ -390,8 +379,8 @@ def clear_chat(user_a, user_b):
     execute(
         """UPDATE messages
            SET deleted = TRUE
-           WHERE (sender=%s AND receiver=%s)
-              OR (sender=%s AND receiver=%s)""",
+           WHERE (sender=%s AND recipient=%s)
+              OR (sender=%s AND recipient=%s)""",
         (user_a, user_b, user_b, user_a)
     )
 

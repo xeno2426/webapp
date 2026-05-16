@@ -459,21 +459,40 @@ function getCsrf() {
 document.addEventListener('DOMContentLoaded', function () {
   var form = document.getElementById('sendForm');
   if (!form) return;
+
+  // File input: normal form submit so uploads work correctly
+  var fileInput = document.getElementById('fileInput');
+  if (fileInput) {
+    fileInput.addEventListener('change', function () {
+      if (fileInput.files && fileInput.files.length > 0) {
+        showFileToast('📎 ' + fileInput.files[0].name);
+        setTimeout(function () { form.submit(); }, 300);
+      }
+    });
+  }
+
   form.addEventListener('submit', function (e) {
+    var fileInput = document.getElementById('fileInput');
+    var hasFile   = fileInput && fileInput.files && fileInput.files.length > 0;
+    // Files go via normal submit — fetch can't show upload progress on mobile
+    if (hasFile) return;
+
     e.preventDefault();
     var inp  = document.getElementById('msgInput');
     var text = inp ? inp.value.trim() : '';
     if (!text) return;
-    var data = new FormData(form);
+
+    var data    = new FormData(form);
     var msgText = text;
-    inp.value = '';
+    inp.value   = '';
     cancelReply();
-    // Optimistically append bubble immediately
+
     removeEmptyState();
-    var row = buildBubble({text: msgText, time: 'just now', ftype: 'text'}, 'me');
-    var box = document.getElementById('chatBox');
+    var row    = buildBubble({text: msgText, time: 'just now', ftype: 'text'}, 'me');
+    var box    = document.getElementById('chatBox');
     var typing = document.getElementById('typingRow');
     if (box) { box.insertBefore(row, typing); scrollToBottom(); }
+
     fetch(window.location.pathname, {
       method:  'POST',
       headers: { 'X-Requested-With': 'XMLHttpRequest',
@@ -482,3 +501,11 @@ document.addEventListener('DOMContentLoaded', function () {
     }).catch(function () { form.submit(); });
   });
 });
+
+function showFileToast(msg) {
+  var t = document.createElement('div');
+  t.className   = 'call-toast';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(function () { if (t.parentNode) t.remove(); }, 2500);
+}
