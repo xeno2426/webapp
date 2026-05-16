@@ -14,9 +14,10 @@ if (socket) {
 
   // ── Incoming message ──────────────────────────────────────────
   socket.on('new_message', function (m) {
+    // Skip own messages — already shown optimistically by AJAX send
+    if (m.sender === CHAT_ME) return;
     removeEmptyState();
-    var align  = (m.sender === CHAT_ME) ? 'me' : 'them';
-    var row    = buildBubble(m, align);
+    var row    = buildBubble(m, 'them');
     var box    = document.getElementById('chatBox');
     var typing = document.getElementById('typingRow');
     if (box) {
@@ -452,8 +453,15 @@ document.addEventListener('DOMContentLoaded', function () {
     var text = inp ? inp.value.trim() : '';
     if (!text) return;
     var data = new FormData(form);
+    var msgText = text;
     inp.value = '';
     cancelReply();
+    // Optimistically append bubble immediately
+    removeEmptyState();
+    var row = buildBubble({text: msgText, time: 'just now', ftype: 'text'}, 'me');
+    var box = document.getElementById('chatBox');
+    var typing = document.getElementById('typingRow');
+    if (box) { box.insertBefore(row, typing); scrollToBottom(); }
     fetch(window.location.pathname, {
       method:  'POST',
       headers: { 'X-Requested-With': 'XMLHttpRequest',

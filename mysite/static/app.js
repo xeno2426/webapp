@@ -84,7 +84,7 @@ function submitOnce(form) {
 
 document.addEventListener('DOMContentLoaded', function () {
   document.querySelectorAll('form[method="post"]').forEach(function (form) {
-    if (form.id === "sendForm") return;
+    
     // Skip forms that already have an onsubmit handler
     if (!form.getAttribute('onsubmit')) {
       form.addEventListener('submit', function () { submitOnce(form); });
