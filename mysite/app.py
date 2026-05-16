@@ -221,6 +221,10 @@ def build_messages(chat_data, me):
 
         # Reactions: JSONB dict → {emoji: [user, ...]}
         raw_reactions = msg.get("reactions") or {}
+        if isinstance(raw_reactions, str):
+            try:
+                import json as _json; raw_reactions = _json.loads(raw_reactions)
+            except Exception: raw_reactions = {}
         reactions_by_emoji = {}
         for user_key, emoji_val in raw_reactions.items():
             if emoji_val:
