@@ -1,268 +1,218 @@
 {% extends "base.html" %}
-{% block title %}{{ group.name }} · Xeno WebApp{% endblock %}
+{% block title %}{{ group.name }} · Xeno{% endblock %}
+
 {% block content %}
-<h1>
-  {% if avatar_url %}<img src="{{ avatar_url }}" class="group-avatar-large">{% endif %}
-  {{ group.name }}
-</h1>
-<p>Group chat · {{ group.members|length }} members</p>
+<div class="chat-screen" id="chatScreen" data-theme="{{ chat_theme }}">
 
-{% if is_owner %}
-<form method="get" action="/group/{{ group_id }}/admin" style="margin-top:8px;">
-  <button class="btn2" type="submit">Open group admin panel</button>
-</form>
-{% endif %}
+  <!-- ── HEADER ── -->
+  <header class="chat-header" id="chatHeader">
+    <a href="/groups" class="chat-back" aria-label="Back">←</a>
 
-<div class="chat-box" id="chatBox">
-{% if messages %}
-  {% for m in messages %}
-  <div class="msg-row">
-    <div class="msg-bubble {{ m.align }}" data-id="{{ m.id }}" data-index="{{ m.index }}">
-      <div class="msg-author">{{ m.sender }}<span class="msg-time">{{ m.time }}</span></div>
-      {% if m.reply %}
-      <div class="reply-preview">Replying to @{{ m.reply.author }}: {{ m.reply.text }}</div>
-      {% endif %}
-      {% if not m.deleted %}
-        {% if m.is_image %}
-        <div class="image-box"><a href="{{ m.url }}" target="_blank"><img src="{{ m.url }}" alt="{{ m.filename }}"></a></div>
-        {% elif m.is_audio %}
-        <div class="voice-box"><audio controls preload="none"><source src="{{ m.url }}"></audio></div>
-        {% elif m.ftype == 'file' %}
-        <div class="msg-file"><a href="{{ m.url }}" target="_blank">{{ m.filename }}</a></div>
-        {% endif %}
-      {% endif %}
-      <div class="msg-text">{{ m.text }}</div>
-      {% if m.reactions %}
-      <div class="reaction-row">
-        {% for emoji, count in m.reactions.items() %}
-        <span class="reaction-chip">{{ emoji }} {{ count }}</span>
-        {% endfor %}
-      </div>
-      {% endif %}
-      {% if m.sender == user and m.seen_by_others and not m.deleted %}
-      <div class="seen-row">
-        {% if m.seen_by_others|length <= 3 %}Seen by {{ m.seen_by_others|join(', ') }}
-        {% else %}Seen by {{ m.seen_by_others|length }} members{% endif %}
-      </div>
-      {% endif %}
-      {% if not m.deleted %}
-      <div class="msg-actions">
-        <form method="post" style="display:inline;">
-          <input type="hidden" name="action" value="set_reply">
-          <input type="hidden" name="msg_id" value="{{ m.id }}">  {# Fix 2.2 — was m.index #}
-          <button class="msg-action-btn" type="submit">Reply</button>
-        </form>
-        {% if m.sender == user %}
-        <form method="post" style="display:inline;">
-          <input type="hidden" name="action" value="delete">
-          <input type="hidden" name="msg_id" value="{{ m.id }}">
-          <button class="msg-action-btn" type="submit">Delete</button>
-        </form>
-        {% endif %}
-      </div>
+    <div class="chat-header-avatar-wrap">
+      {% if avatar_url %}
+        <img src="{{ avatar_url }}" class="chat-header-avatar" alt="{{ group.name }}">
+      {% else %}
+        <div class="chat-header-avatar-placeholder">{{ group.name[0]|upper }}</div>
       {% endif %}
     </div>
-  </div>
-  {% endfor %}
-{% else %}
-  <p style="font-size:13px;color:#64748b;" id="emptyMsg">No messages yet.</p>
-{% endif %}
-  <div id="typingIndicator" style="display:none;" class="msg-row">
-    <div class="msg-bubble them">
-      <div class="msg-author" id="typingName">someone <span class="msg-time">typing…</span></div>
-      <div class="msg-text" style="opacity:.7;">typing…</div>
+
+    <div class="chat-header-info">
+      <div class="chat-header-name">{{ group.name }}</div>
+      <div class="chat-header-status" id="chatStatus">
+        {{ group.members|length }} member{{ 's' if group.members|length != 1 }}
+      </div>
+    </div>
+
+    <div class="chat-header-actions">
+      <button class="chat-icon-btn" id="menuBtn" title="More options" onclick="toggleChatMenu()">⋮</button>
+    </div>
+
+    <!-- Three-dot dropdown -->
+    <div class="chat-dropdown" id="chatDropdown">
+      {% if is_owner %}
+        <a href="/group/{{ group_id }}/admin" class="chat-dropdown-item">⚙️ Group Admin</a>
+        <button onclick="openThemePicker()" class="chat-dropdown-item">🎨 Chat theme</button>
+        <div class="chat-dropdown-divider"></div>
+      {% endif %}
+      <button onclick="openChatSearch()"  class="chat-dropdown-item">🔍 Search</button>
+      <button onclick="openMediaPanel()"  class="chat-dropdown-item">🖼 Media &amp; docs</button>
+    </div>
+  </header>
+
+  <!-- ── SEARCH BAR ── -->
+  <div class="chat-search-bar" id="chatSearchBar" style="display:none">
+    <button class="chat-search-close" onclick="closeChatSearch()">←</button>
+    <input type="text" class="chat-search-input" id="chatSearchInput"
+           placeholder="Search in chat…" oninput="searchMessages(this.value)">
+    <div class="chat-search-nav">
+      <span id="searchResultCount">0 of 0</span>
+      <button onclick="prevSearchResult()">↑</button>
+      <button onclick="nextSearchResult()">↓</button>
     </div>
   </div>
-</div>
 
-{% if reply_pending %}
-<div class="reply-preview" style="margin-top:10px;">
-  Replying to @{{ reply_pending.author }}: {{ reply_pending.text }}
-  <form method="post" style="display:inline;">
-    <input type="hidden" name="action" value="set_reply">
-    <input type="hidden" name="msg_id" value="-1">  {# Fix 2.2 — renamed from msg_index #}
-    <button class="reply-cancel" type="submit">✕ Cancel</button>
+  <!-- ── MESSAGES ── -->
+  <div class="chat-messages" id="chatBox">
+    {% for item in messages %}
+      {% if item.type == 'date_sep' %}
+        <div class="date-sep"><span>{{ item.label }}</span></div>
+
+      {% elif item.type == 'message' %}
+        <div class="msg-row {{ item.align }}" id="msg-{{ item.id }}" data-id="{{ item.id }}">
+          <div class="msg-bubble {{ item.align }}"
+               data-id="{{ item.id }}"
+               oncontextmenu="showMsgMenu(event, {{ item.id }}, '{{ item.align }}')"
+               ontouchstart="handleTouchStart(event, {{ item.id }}, '{{ item.align }}')">
+
+            {% if item.align == 'them' %}
+              <div class="msg-author">{{ item.sender }}</div>
+            {% endif %}
+
+            {% if item.reply_to %}
+            <div class="reply-quote" onclick="scrollToMsg({{ item.reply_to.id }})">
+              <span class="reply-quote-author">{{ item.reply_to.author }}</span>
+              <span class="reply-quote-text">{{ item.reply_to.text[:60] }}{% if item.reply_to.text|length > 60 %}…{% endif %}</span>
+            </div>
+            {% endif %}
+
+            {% if not item.deleted %}
+              {% if item.is_image %}
+                <div class="msg-media">
+                  <a href="{{ item.url }}" target="_blank">
+                    <img src="{{ item.url }}" alt="{{ item.filename }}" loading="lazy">
+                  </a>
+                </div>
+              {% elif item.is_video %}
+                <div class="msg-media">
+                  <video src="{{ item.url }}" controls preload="none" playsinline></video>
+                </div>
+              {% elif item.is_audio %}
+                <div class="msg-audio">
+                  <span>🎵</span>
+                  <audio controls preload="none"><source src="{{ item.url }}"></audio>
+                </div>
+              {% elif item.ftype == 'file' %}
+                <div class="msg-file">
+                  <span>📎</span>
+                  <a href="{{ item.url }}" target="_blank" download>{{ item.filename }}</a>
+                </div>
+              {% endif %}
+            {% endif %}
+
+            {% if item.deleted %}
+              <div class="msg-text deleted">🚫 Message deleted</div>
+            {% elif item.text %}
+              <div class="msg-text">{{ item.text }}</div>
+            {% endif %}
+
+            <div class="msg-meta">
+              <span class="msg-time">{{ item.time }}</span>
+              {% if item.align == 'me' and item.seen_by_others %}
+                <span class="msg-tick seen" title="Seen by {{ item.seen_by_others|join(', ') }}">✓✓</span>
+              {% elif item.align == 'me' %}
+                <span class="msg-tick">✓</span>
+              {% endif %}
+            </div>
+
+            {% if item.reactions %}
+            <div class="reaction-row">
+              {% for emoji, users in item.reactions.items() %}
+                <form method="post" style="display:inline">
+                  <input type="hidden" name="action" value="react">
+                  <input type="hidden" name="msg_id"  value="{{ item.id }}">
+                  <input type="hidden" name="emoji"   value="{{ emoji }}">
+                  <button class="reaction-chip {% if user in users %}mine{% endif %}">
+                    {{ emoji }} {{ users|length }}
+                  </button>
+                </form>
+              {% endfor %}
+            </div>
+            {% endif %}
+
+          </div>
+        </div>
+      {% endif %}
+    {% else %}
+      <div class="empty-state" id="emptyMsg">
+        <div class="empty-icon">💬</div>
+        <div class="empty-title">No messages yet</div>
+        <div class="empty-sub">Be the first to say something!</div>
+      </div>
+    {% endfor %}
+
+    <!-- Typing indicator -->
+    <div class="msg-row them" id="typingRow" style="display:none">
+      <div class="msg-bubble them typing-bubble">
+        <span class="typing-dot"></span>
+        <span class="typing-dot"></span>
+        <span class="typing-dot"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── REPLY BAR ── -->
+  <div class="reply-bar" id="replyBar" style="display:none">
+    <div class="reply-bar-inner">
+      <div class="reply-bar-line"></div>
+      <div class="reply-bar-content">
+        <span class="reply-bar-author" id="replyBarAuthor"></span>
+        <span class="reply-bar-text"   id="replyBarText"></span>
+      </div>
+    </div>
+    <button class="reply-bar-close" onclick="cancelReply()">✕</button>
+  </div>
+
+  <!-- ── INPUT BAR ── -->
+  <form class="chat-input-bar" id="sendForm" method="post" enctype="multipart/form-data">
+    <input type="hidden" name="action"   value="send">
+    <input type="hidden" name="reply_to" id="replyToInput" value="">
+
+    <input
+      class="chat-input"
+      name="message"
+      id="msgInput"
+      placeholder="Message {{ group.name }}…"
+      autocomplete="off"
+      autocorrect="on"
+    >
+
+    <label class="input-icon-btn" for="fileInput" title="Attach">📎</label>
+    <input id="fileInput" type="file" name="file" style="display:none"
+           onchange="this.form.submit()">
+
+    <button type="submit" class="send-btn" id="sendBtn" title="Send">➤</button>
   </form>
+
+</div>{# end .chat-screen #}
+
+<div id="callOverlayContainer"></div>
+<div id="themePickerContainer"></div>
+
+<!-- Media panel -->
+<div class="media-panel" id="mediaPanel" style="display:none">
+  <div class="media-panel-header">
+    <button onclick="closeMediaPanel()">←</button>
+    <h2>Media &amp; docs</h2>
+  </div>
+  <div class="media-panel-tabs">
+    <button class="mpanel-tab active" onclick="switchMediaTab(this,'media')">Media</button>
+    <button class="mpanel-tab"        onclick="switchMediaTab(this,'links')">Links</button>
+    <button class="mpanel-tab"        onclick="switchMediaTab(this,'docs')">Docs</button>
+  </div>
+  <div class="media-panel-body" id="mediaPanelBody">
+    <div class="empty-state"><div class="empty-icon">🖼</div><div class="empty-sub">No media shared yet.</div></div>
+  </div>
 </div>
-{% endif %}
-
-<form method="post" enctype="multipart/form-data" class="chat-input-row" id="sendForm">
-  <input type="hidden" name="action" value="send">
-  <input name="message" placeholder="Type a message..." id="msgInput" autocomplete="off">
-  <div style="margin-top:8px;"><input type="file" name="file"></div>
-  <button class="btn" type="submit" style="margin-top:10px;">Send</button>
-</form>
-
-<div class="reaction-picker" id="reactionPicker"></div>
-<form id="reactionForm" method="post" style="display:none;">
-  <input type="hidden" name="action" value="react">
-  <input type="hidden" name="msg_id" id="reactionMsgId">
-  <input type="hidden" name="emoji" id="reactionEmoji">
-</form>
 {% endblock %}
 
 {% block scripts %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
 <script>
-(function(){
-  var ME      = "{{ user }}";
-  var ROOM    = "{{ socket_room }}";
-  var box     = document.getElementById('chatBox');
-  var inp     = document.getElementById('msgInput');
-  var typingEl= document.getElementById('typingIndicator');
-  var typingName = document.getElementById('typingName');
-  var typingTimer = null;
-  var emptyMsg = document.getElementById('emptyMsg');
-
-  // Fix 1.3 — grab CSRF token once for dynamic forms
-  var csrfMeta  = document.querySelector('meta[name="csrf-token"]');
-  var csrfToken = csrfMeta ? csrfMeta.getAttribute('content') : '';
-
-  if(box) box.scrollTop = box.scrollHeight;
-
-  if(inp){
-    inp.addEventListener('keydown', function(e){
-      if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); document.getElementById('sendForm').submit(); }
-    });
-  }
-
-  var socket = io({ transports: ['websocket','polling'] });
-  socket.on('connect', function(){ socket.emit('join', { room: ROOM }); });
-
-  // Fix 1.8 — build message bubbles with DOM API; no innerHTML for user data.
-  var IMAGE_EXTS = ['png','jpg','jpeg','gif','webp','bmp'];
-  var AUDIO_EXTS = ['mp3','wav','m4a','ogg','oga','aac'];
-
-  function makeText(tag, cls, text){
-    var el = document.createElement(tag);
-    if(cls) el.className = cls;
-    el.textContent = text;
-    return el;
-  }
-
-  socket.on('new_message', function(m){
-    if(emptyMsg){ emptyMsg.remove(); emptyMsg=null; }
-    var align = (m.sender===ME) ? 'me' : 'them';
-
-    var bubble = document.createElement('div');
-    bubble.className = 'msg-bubble ' + align;
-    bubble.dataset.id = m.id || '';
-
-    // Author + time
-    var author = document.createElement('div');
-    author.className = 'msg-author';
-    author.textContent = m.sender;           // textContent — safe
-    var tspan = document.createElement('span');
-    tspan.className = 'msg-time';
-    tspan.textContent = m.time;
-    author.appendChild(tspan);
-    bubble.appendChild(author);
-
-    // Media attachment
-    if(m.ftype==='file' && m.url){
-      var ext=(m.filename||'').split('.').pop().toLowerCase();
-      var mediaDiv = document.createElement('div');
-      if(IMAGE_EXTS.indexOf(ext)!==-1){
-        mediaDiv.className='image-box';
-        var a=document.createElement('a'); a.href=m.url; a.target='_blank';
-        var img=document.createElement('img'); img.src=m.url;
-        a.appendChild(img); mediaDiv.appendChild(a);
-      } else if(AUDIO_EXTS.indexOf(ext)!==-1){
-        mediaDiv.className='voice-box';
-        var audio=document.createElement('audio'); audio.controls=true; audio.preload='none';
-        var src=document.createElement('source'); src.src=m.url;
-        audio.appendChild(src); mediaDiv.appendChild(audio);
-      } else {
-        mediaDiv.className='msg-file';
-        var a=document.createElement('a'); a.href=m.url; a.target='_blank';
-        a.textContent=m.filename;            // textContent — safe
-        mediaDiv.appendChild(a);
-      }
-      bubble.appendChild(mediaDiv);
-    }
-
-    bubble.appendChild(makeText('div','msg-text', m.text||''));  // textContent — safe
-
-    var row=document.createElement('div');
-    row.className='msg-row';
-    row.appendChild(bubble);
-    box.insertBefore(row, typingEl);
-    box.scrollTop=box.scrollHeight;
-  });
-
-  socket.on('typing', function(data){
-    if(data.sender===ME) return;
-    // Fix 1.8 — use textContent, not innerHTML, for the sender name
-    if(typingName){
-      typingName.textContent = data.sender + ' ';
-      var tspan = document.createElement('span');
-      tspan.className = 'msg-time';
-      tspan.textContent = 'typing…';
-      typingName.appendChild(tspan);
-    }
-    if(typingEl) typingEl.style.display='';
-    box.scrollTop=box.scrollHeight;
-    clearTimeout(typingTimer);
-    typingTimer=setTimeout(function(){ if(typingEl) typingEl.style.display='none'; },3500);
-  });
-
-  if(inp){
-    inp.addEventListener('input', function(){
-      socket.emit('typing', { room: ROOM });  // Fix 1.7 — server reads sender from session
-    });
-  }
-
-  // Swipe-to-reply
-  var sx=0;
-  document.addEventListener('touchstart',function(e){
-    var b=e.target.closest('.msg-bubble'); if(!b) return;
-    sx=e.changedTouches[0].screenX; b.classList.add('swipe-target');
-  },{passive:true});
-  document.addEventListener('touchend',function(e){
-    var b=document.querySelector('.swipe-target'); if(!b) return;
-    var dx=e.changedTouches[0].screenX-sx; b.classList.remove('swipe-target');
-    if(dx>60){
-      var mid=b.getAttribute('data-id'); if(!mid) return;  // Fix 2.2 — was data-index (loop pos)
-      var f=document.createElement('form'); f.method='post'; f.style.display='none';
-      var a1=document.createElement('input'); a1.name='action'; a1.value='set_reply';
-      var a2=document.createElement('input'); a2.name='msg_id'; a2.value=mid;  // Fix 2.2
-      // Fix 1.3 — inject CSRF token into dynamically submitted form
-      var csrf=document.createElement('input'); csrf.type='hidden'; csrf.name='csrf_token'; csrf.value=csrfToken;
-      f.appendChild(a1); f.appendChild(a2); f.appendChild(csrf);
-      document.body.appendChild(f); f.submit();
-    }
-  },{passive:true});
-
-  // Tap-to-react
-  var EMOJIS=['❤️','😂','👍','😮','😢','🔥'];
-  var picker=document.getElementById('reactionPicker');
-  var rForm=document.getElementById('reactionForm');
-  var rMsgId=document.getElementById('reactionMsgId');
-  var rEmoji=document.getElementById('reactionEmoji');
-  function showPicker(bubble){
-    if(!picker) return;
-    var id=bubble.getAttribute('data-id'); if(!id) return;
-    picker.innerHTML=EMOJIS.map(function(e){ return '<button type="button" data-emoji="'+e+'">'+e+'</button>'; }).join('');
-    var rect=bubble.getBoundingClientRect();
-    picker.style.display='block';
-    picker.style.left=(rect.left+rect.width/2)+'px';
-    picker.style.top=(rect.top-40)+'px';
-    picker.setAttribute('data-id',id);
-  }
-  document.addEventListener('click',function(e){
-    var b=e.target.closest('.msg-bubble');
-    if(b){ showPicker(b); return; }
-    if(picker&&picker.style.display==='block'&&!picker.contains(e.target)) picker.style.display='none';
-  });
-  if(picker){
-    picker.addEventListener('click',function(e){
-      if(e.target.tagName.toLowerCase()==='button'){
-        rMsgId.value=picker.getAttribute('data-id');
-        rEmoji.value=e.target.getAttribute('data-emoji');
-        rForm.submit();
-      }
-    });
-  }
-})();
+  const CHAT_FRIEND = "{{ group.name }}";
+  const CHAT_ROOM   = "{{ socket_room }}";
+  const CHAT_ME     = "{{ user }}";
+  const IS_GROUP    = true;
+  const GROUP_ID    = "{{ group_id }}";
 </script>
+<script src="/static/chat.js"></script>
+<script src="/static/theme.js"></script>
 {% endblock %}

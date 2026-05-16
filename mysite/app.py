@@ -173,41 +173,69 @@ def file_is_safe(file_storage, ext):
     return True
 
 def build_messages(chat_data, me):
-    messages = []
-    for i, msg in enumerate(chat_data):
-        sender  = msg.get("from") or msg.get("sender","")
-        deleted = msg.get("deleted", False)
-        text    = "This message was deleted" if deleted else decrypt_text(msg.get("text",""))
-        ftype   = msg.get("ftype","text")
-        filename= msg.get("filename","") or ""
-        url     = msg.get("url","") or ""
-        ext     = filename.rsplit(".",1)[1].lower() if "." in filename else ""
-        msg_id  = msg.get("id", i)
+    """
+    Build the messages list for the template.
+    B2: Injects {"type":"date_sep","label":...} entries whenever the
+    calendar date changes between consecutive messages.
+    """
+    result    = []
+    prev_date = None
 
-        reply = None
+    for i, msg in enumerate(chat_data):
+        # ── Date separator ──────────────────────────────────────
+        ts = msg.get("created_at")
+        if ts:
+            msg_date = ts.date() if hasattr(ts, "date") else None
+            if msg_date and msg_date != prev_date:
+                today = datetime.now(timezone.utc).date()
+                if msg_date == today:
+                    label = "Today"
+                elif msg_date == today - timedelta(days=1):
+                    label = "Yesterday"
+                else:
+                    label = ts.strftime("%B %d")
+                result.append({"type": "date_sep", "label": label})
+                prev_date = msg_date
+
+        # ── Message entry ───────────────────────────────────────
+        sender   = msg.get("from") or msg.get("sender", "")
+        deleted  = msg.get("deleted", False)
+        text     = "This message was deleted" if deleted else decrypt_text(msg.get("text", ""))
+        ftype    = msg.get("ftype", "text")
+        filename = msg.get("filename", "") or ""
+        url      = msg.get("url", "") or ""
+        ext      = filename.rsplit(".", 1)[1].lower() if "." in filename else ""
+        msg_id   = msg.get("id", i)
+
+        # Reply-to resolution
+        reply_to = None
         ri = msg.get("reply_to")
         if isinstance(ri, int) and ri > 0:
             rm = next((m for m in chat_data if (m.get("id") or 0) == ri), None)
             if rm:
-                reply = {"id": ri,
-                         "author": rm.get("from") or rm.get("sender",""),
-                         "text": (decrypt_text(rm.get("text","")) or "[attachment]")[:40]}
+                reply_to = {
+                    "id":     ri,
+                    "author": rm.get("from") or rm.get("sender", ""),
+                    "text":   (decrypt_text(rm.get("text", "")) or "[attachment]")[:60],
+                }
 
+        # Reactions: JSONB dict → {emoji: [user, ...]}
         raw_reactions = msg.get("reactions") or {}
-        # Fix 3.5 — reactions is now JSONB; psycopg2 returns a dict directly.
-        reaction_counts = {}
-        for em in raw_reactions.values():
-            reaction_counts[em] = reaction_counts.get(em, 0) + 1
+        reactions_by_emoji = {}
+        for user_key, emoji_val in raw_reactions.items():
+            if emoji_val:
+                reactions_by_emoji.setdefault(emoji_val, []).append(user_key)
 
-        seen_by = msg.get("seen_by") or []
+        seen_by        = msg.get("seen_by") or []
         seen_by_others = [u for u in seen_by if u != me]
 
-        messages.append({
+        result.append({
+            "type":     "message",
             "id":       msg_id,
             "index":    i,
             "sender":   sender,
             "text":     text,
-            "time":     time_ago(msg.get("created_at") or msg.get("time","")),
+            "time":     time_ago(msg.get("created_at") or msg.get("time", "")),
             "ftype":    ftype,
             "filename": filename,
             "url":      url,
@@ -217,13 +245,14 @@ def build_messages(chat_data, me):
             "is_video": ext in VIDEO_EXTS and ftype == "file",
             "seen":     msg.get("seen", False),
             "deleted":  deleted,
-            "reply":    reply,
-            "reactions":reaction_counts,
-            "my_reaction": raw_reactions.get(me,""),
+            "reply_to": reply_to,
+            "reactions": reactions_by_emoji,
+            "my_reaction": raw_reactions.get(me, ""),
             "seen_by_others": seen_by_others,
             "align":    "me" if sender == me else "them",
         })
-    return messages
+
+    return result
 
 @app.context_processor
 def inject_globals():
@@ -297,7 +326,7 @@ def on_typing(data):
 
 # ---------- AUTH ----------
 @app.route("/signup", methods=["GET","POST"])
-@limiter.limit("20 per hour")   # Fix 4.3 — prevent signup spam
+@limiter.limit("5 per hour")   # Fix 4.3 — prevent signup spam
 def signup():
     if current_user(): return redirect("/")
     error = ""
@@ -667,9 +696,17 @@ def chat(friend):
             if utc_now() - ts < timedelta(seconds=4): typing = friend
         except Exception: pass
 
+    friend_info    = db.get_user(friend) or {}
+    friend_online  = db.is_online(friend)
+    friend_avatar  = friend_info.get("avatar", "")
+    chat_theme     = ""   # placeholder until Batch E
+
     return render_template("chat.html", user=me, friend=friend,
                            messages=messages, reply_pending=reply_pending,
                            typing=typing, active="friends",
+                           friend_online=friend_online,
+                           friend_avatar=friend_avatar,
+                           chat_theme=chat_theme,
                            socket_room=dm_room(me, friend))
 
 @app.route("/typing/<friend>", methods=["POST"])
@@ -679,6 +716,34 @@ def typing(friend):
     if not me: return ("",401)
     db.update_user(me, typing_to=friend, typing_ts=utc_now())
     return ("",204)
+
+# ---------- B4: CLEAR / BLOCK / REPORT ----------
+
+@app.route("/chat/<friend>/clear", methods=["POST"])
+@csrf.exempt
+def clear_chat_route(friend):
+    me = current_user()
+    if not me: return ("", 401)
+    if not db.are_friends(me, friend): return ("", 403)
+    db.clear_chat(me, friend)
+    return ("", 204)
+
+@app.route("/user/<username>/block", methods=["POST"])
+@csrf.exempt
+def block_user_route(username):
+    me = current_user()
+    if not me: return ("", 401)
+    db.block_user(me, username)
+    return ("", 204)
+
+@app.route("/user/<username>/report", methods=["POST"])
+@csrf.exempt
+def report_user_route(username):
+    me = current_user()
+    if not me: return ("", 401)
+    reason = request.form.get("reason", "").strip()[:1000]
+    db.file_report(reporter=me, reported=username, reason=reason)
+    return ("", 204)
 
 # ---------- STORIES ----------
 @app.route("/stories", methods=["GET","POST"])
@@ -891,11 +956,14 @@ def group_chat(group_id):
                 if utc_now() - ts < timedelta(seconds=4): typing_users.append(m)
             except Exception: pass
 
+    chat_theme = ""   # placeholder until Batch E
+
     return render_template("group_chat.html", user=me, group=group,
                            group_id=group_id, is_owner=(group.get("owner")==me),
                            messages=messages, reply_pending=reply_pending,
                            typing_users=typing_users,
                            avatar_url=group.get("avatar",""), active="groups",
+                           chat_theme=chat_theme,
                            socket_room=group_room(group_id))
 
 @app.route("/gtyping/<group_id>", methods=["POST"])

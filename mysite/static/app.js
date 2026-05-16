@@ -125,21 +125,22 @@ function updateBanner(count, senders) {
   b.style.display = 'flex';
 }
 
-// ── Global socket — unread notifications on every page ───────────
-// Socket.io is loaded in base.html. We connect once per page load,
-// join the personal room "user_{username}", and listen for
-// unread_update events pushed by the server whenever a DM arrives.
-document.addEventListener('DOMContentLoaded', function () {
+// ── Global socket — created immediately so chat.js can use it ────
+// Socket.io CDN is loaded before this script in base.html.
+// We create one socket per page load, join the personal room
+// "user_{username}", and listen for unread_update events.
+// Exposed as window._xenoSocket for chat.js and call.js to reuse.
+(function () {
   var userMeta = document.querySelector('meta[name="current-user"]');
-  if (!userMeta) return;                       // not logged in
+  if (!userMeta || typeof io === 'undefined') return;
   var username = userMeta.getAttribute('content');
   if (!username) return;
 
-  if (typeof io === 'undefined') return;       // socket.io not loaded
-
   var socket = io({ transports: ['websocket', 'polling'] });
+  window._xenoSocket = socket;
 
   socket.on('connect', function () {
+    // Always join personal room for cross-page notifications + calls
     socket.emit('join', { room: 'user_' + username });
   });
 
@@ -148,11 +149,10 @@ document.addEventListener('DOMContentLoaded', function () {
     updateBanner(d.unread || 0, d.senders || []);
   });
 
-  // Expose socket globally so chat pages can reuse the connection
-  window._xenoSocket = socket;
-
-  // Keep last_seen up-to-date for the online dot
+  // Ping to keep last_seen fresh (online dot on friends page)
   function pingOnline() { fetch('/ping', { method: 'POST' }).catch(function () {}); }
-  pingOnline();
-  setInterval(pingOnline, 20000);
-});
+  document.addEventListener('DOMContentLoaded', function () {
+    pingOnline();
+    setInterval(pingOnline, 20000);
+  });
+}());

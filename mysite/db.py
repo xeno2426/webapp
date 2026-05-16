@@ -361,3 +361,69 @@ def add_story_viewer(story_id, viewer):
         SET viewers = viewers || jsonb_build_array(%s::text)
         WHERE id = %s AND NOT (viewers @> jsonb_build_array(%s::text))
     """, (viewer, story_id, viewer))
+
+# ---------- B4: CLEAR / BLOCK / REPORT / ONLINE ----------
+
+def is_online(username):
+    """True if user was active within the last 90 seconds."""
+    row = query("SELECT last_seen FROM users WHERE username=%s", (username,), one=True)
+    if not row or not row.get("last_seen"): return False
+    from datetime import datetime, timedelta, timezone
+    ts = row["last_seen"]
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - ts) < timedelta(seconds=90)
+
+def clear_chat(user_a, user_b):
+    """Soft-delete all DMs between two users by marking them deleted."""
+    execute(
+        """UPDATE messages
+           SET deleted = TRUE
+           WHERE (sender=%s AND receiver=%s)
+              OR (sender=%s AND receiver=%s)""",
+        (user_a, user_b, user_b, user_a)
+    )
+
+def block_user(blocker, blocked):
+    """
+    Remove friendship and record block.
+    Uses IF NOT EXISTS so calling twice is safe.
+    Requires a blocks table — schema below (auto-created if absent).
+    """
+    execute("""
+        CREATE TABLE IF NOT EXISTS blocks (
+            id         SERIAL PRIMARY KEY,
+            blocker    TEXT NOT NULL,
+            blocked    TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(blocker, blocked)
+        )
+    """)
+    execute(
+        "INSERT INTO blocks(blocker,blocked) VALUES(%s,%s) ON CONFLICT DO NOTHING",
+        (blocker, blocked)
+    )
+    # Also remove the friend relationship
+    execute(
+        "DELETE FROM friends WHERE (user_a=%s AND user_b=%s) OR (user_a=%s AND user_b=%s)",
+        (blocker, blocked, blocked, blocker)
+    )
+
+def file_report(reporter, reported, reason=""):
+    """
+    Record a user report.
+    Requires a reports table — auto-created if absent.
+    """
+    execute("""
+        CREATE TABLE IF NOT EXISTS reports (
+            id         SERIAL PRIMARY KEY,
+            reporter   TEXT NOT NULL,
+            reported   TEXT NOT NULL,
+            reason     TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    execute(
+        "INSERT INTO reports(reporter,reported,reason) VALUES(%s,%s,%s)",
+        (reporter, reported, reason)
+    )
