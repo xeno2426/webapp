@@ -330,6 +330,65 @@ def on_typing(data):
     if room:
         socket_emit("typing", {"sender": me}, to=room, include_self=False)
 
+
+# ---------- C2: WEBRTC SIGNALLING ----------
+
+@socketio.on("connect")
+def on_connect():
+    """Auto-join personal room on every socket connect.
+    Complements the explicit 'join' emit from app.js —
+    ensures call signals reach the user on ANY page, not just chat."""
+    me = session.get("user")
+    if me:
+        join_room(f"user_{me}")
+
+@socketio.on("call_offer")
+def on_call_offer(data):
+    me = session.get("user")
+    to = data.get("to")
+    if not me or not to or not db.are_friends(me, to):
+        return
+    user_info = db.get_user(me) or {}
+    socketio.emit("call_offer", {
+        "from":        me,
+        "sdp":         data.get("sdp"),
+        "from_avatar": user_info.get("avatar", "")
+    }, to=f"user_{to}")
+
+@socketio.on("call_answer")
+def on_call_answer(data):
+    me = session.get("user")
+    to = data.get("to")
+    if not me or not to: return
+    socketio.emit("call_answer", {
+        "from": me,
+        "sdp":  data.get("sdp")
+    }, to=f"user_{to}")
+
+@socketio.on("ice_candidate")
+def on_ice_candidate(data):
+    me = session.get("user")
+    to = data.get("to")
+    if not me or not to: return
+    socketio.emit("ice_candidate", {
+        "from":      me,
+        "candidate": data.get("candidate")
+    }, to=f"user_{to}")
+
+@socketio.on("call_end")
+def on_call_end(data):
+    me = session.get("user")
+    to = data.get("to")
+    if not me or not to: return
+    socketio.emit("call_end", {"from": me}, to=f"user_{to}")
+
+@socketio.on("call_busy")
+def on_call_busy(data):
+    me = session.get("user")
+    to = data.get("to")
+    if not me or not to: return
+    socketio.emit("call_busy", {"from": me}, to=f"user_{to}")
+
 # ---------- AUTH ----------
 @app.route("/signup", methods=["GET","POST"])
 @limiter.limit("5 per hour")   # Fix 4.3 — prevent signup spam
