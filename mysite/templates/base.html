@@ -4,58 +4,28 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>{% block title %}Xeno{% endblock %}</title>
-
-  {# Fix 1: CSRF token — required by app.js auto-injection and Flask-WTF #}
   <meta name="csrf-token" content="{{ csrf_token() }}">
-
-  {# Fix 2: Current user — required by app.js for socket room join + notification banner #}
   {% if session.get('user') %}
   <meta name="current-user" content="{{ session.get('user') }}">
   {% endif %}
-
   <link rel="stylesheet" href="/static/style.css">
-
-  {# Fix 3: Socket.io must stay global — app.js uses `socket` for unread notifications
-     on every page. Chat pages piggyback on this same connection. #}
   <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
   <div class="shell">
-
-    <!-- ── SIDEBAR (desktop only) ── -->
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-brand">
         <span class="brand-logo">🌸</span>
         <span class="brand-name">Xeno</span>
       </div>
-
       {% if user %}
       <nav class="sidebar-nav">
-        <a href="/"        class="snav-item {% if active=='home'    %}active{% endif %}">
-          <span class="snav-icon">🏠</span>
-          <span class="snav-label">Home</span>
-        </a>
-        <a href="/friends" class="snav-item {% if active=='friends' %}active{% endif %}">
-          <span class="snav-icon">👥</span>
-          <span class="snav-label">Friends</span>
-          {% if unread_count and unread_count > 0 %}
-            <span class="snav-badge">{{ unread_count }}</span>
-          {% endif %}
-        </a>
-        <a href="/stories" class="snav-item {% if active=='stories' %}active{% endif %}">
-          <span class="snav-icon">✨</span>
-          <span class="snav-label">Stories</span>
-        </a>
-        <a href="/groups"  class="snav-item {% if active=='groups'  %}active{% endif %}">
-          <span class="snav-icon">💬</span>
-          <span class="snav-label">Groups</span>
-        </a>
-        <a href="/profile" class="snav-item {% if active=='profile' %}active{% endif %}">
-          <span class="snav-icon">🌸</span>
-          <span class="snav-label">Profile</span>
-        </a>
+        <a href="/"        class="snav-item {% if active=='home'    %}active{% endif %}"><span class="snav-icon">🏠</span><span class="snav-label">Home</span></a>
+        <a href="/friends" class="snav-item {% if active=='friends' %}active{% endif %}"><span class="snav-icon">👥</span><span class="snav-label">Friends</span>{% if unread_count and unread_count > 0 %}<span class="snav-badge">{{ unread_count }}</span>{% endif %}</a>
+        <a href="/stories" class="snav-item {% if active=='stories' %}active{% endif %}"><span class="snav-icon">✨</span><span class="snav-label">Stories</span></a>
+        <a href="/groups"  class="snav-item {% if active=='groups'  %}active{% endif %}"><span class="snav-icon">💬</span><span class="snav-label">Groups</span></a>
+        <a href="/profile" class="snav-item {% if active=='profile' %}active{% endif %}"><span class="snav-icon">🌸</span><span class="snav-label">Profile</span></a>
       </nav>
-
       <div class="sidebar-footer">
         <span class="sidebar-user">@{{ user }}</span>
         <a href="/logout" class="sidebar-logout">Sign out</a>
@@ -63,46 +33,21 @@
       {% endif %}
     </aside>
 
-    <!-- ── MAIN CONTENT ── -->
     <main class="main-content" id="mainContent">
       {% block content %}{% endblock %}
     </main>
 
-    <!-- ── BOTTOM NAV (mobile only) ── -->
     {% if user %}
     <nav class="bottom-nav">
-      <a href="/"        class="bnav-item {% if active=='home'    %}active{% endif %}">
-        <span class="bnav-icon">🏠</span>
-        <span class="bnav-label">Home</span>
-      </a>
-      <a href="/friends" class="bnav-item {% if active=='friends' %}active{% endif %}">
-        <span class="bnav-icon">👥</span>
-        <span class="bnav-label">Friends</span>
-        {% if unread_count and unread_count > 0 %}
-          <span class="bnav-dot"></span>
-        {% endif %}
-      </a>
-      <a href="/stories" class="bnav-item {% if active=='stories' %}active{% endif %}">
-        <span class="bnav-icon">✨</span>
-        <span class="bnav-label">Stories</span>
-      </a>
-      <a href="/groups"  class="bnav-item {% if active=='groups'  %}active{% endif %}">
-        <span class="bnav-icon">💬</span>
-        <span class="bnav-label">Groups</span>
-      </a>
-      <a href="/profile" class="bnav-item {% if active=='profile' %}active{% endif %}">
-        <span class="bnav-icon">🌸</span>
-        <span class="bnav-label">Profile</span>
-      </a>
+      <a href="/"        class="bnav-item {% if active=='home'    %}active{% endif %}"><span class="bnav-icon">🏠</span><span class="bnav-label">Home</span></a>
+      <a href="/friends" class="bnav-item {% if active=='friends' or active=='groups' %}active{% endif %}"><span class="bnav-icon">👥</span><span class="bnav-label">Friends</span>{% if unread_count and unread_count > 0 %}<span class="bnav-dot"></span>{% endif %}</a>
+      <a href="/stories" class="bnav-item {% if active=='stories' %}active{% endif %}"><span class="bnav-icon">✨</span><span class="bnav-label">Stories</span></a>
+      <a href="/groups"  class="bnav-item" title="Games — coming soon"><span class="bnav-icon">🎮</span><span class="bnav-label">Games</span></a>
+      <a href="/profile" class="bnav-item {% if active=='profile' %}active{% endif %}"><span class="bnav-icon">🌸</span><span class="bnav-label">Profile</span></a>
     </nav>
     {% endif %}
-
   </div>
 
-  <!-- ── GLOBAL CONFIRM MODAL ──
-       Generic: title + body set via JS before showing.
-       Used by: friend delete (app.js), note delete (home.html), clear chat (chat.js), etc.
-  -->
   <div class="modal-overlay" id="confirmModal" style="display:none">
     <div class="modal-box">
       <h3 id="confirmTitle">Are you sure?</h3>

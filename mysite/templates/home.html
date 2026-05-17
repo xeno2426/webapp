@@ -20,33 +20,27 @@
        class="btn-small {% if sort != 'newest' %}outline{% endif %}" style="font-size:11px;">Newest</a>
     <a href="/?sort=oldest{% if q %}&q={{ q | urlencode }}{% endif %}"
        class="btn-small {% if sort != 'oldest' %}outline{% endif %}" style="font-size:11px;">Oldest</a>
+    <a href="/note/new" class="btn-small" style="font-size:11px;">+ New</a>
   </div>
 </div>
 
-<p><a href="/note/new" class="link">+ New full note</a></p>
-
-<form method="get" action="/" style="margin-bottom:8px;">
+<form method="get" action="/" style="margin:8px 0;">
   {% if sort != 'newest' %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
-  <input name="q" placeholder="Search notes…" value="{{ q }}"
-         style="margin-bottom:0;" autocomplete="off">
-  {% if q %}
-  <a href="/?sort={{ sort }}" class="btn-small outline" style="font-size:11px;margin-left:4px;">✕ Clear</a>
-  {% endif %}
+  <input name="q" placeholder="Search notes…" value="{{ q }}" style="margin-bottom:0;" autocomplete="off">
 </form>
 
 <div id="notesList">
 {% if notes %}
   {% for n in notes %}
-  <div class="note-card">
-    <div class="note-title">{{ n.title }}</div>
-    <div class="note-time">{{ n.time }}</div>
+  <div class="note-card" onclick="location.href='/note/{{ n.id }}'">
+    <div class="note-header">
+      <div class="note-title">{{ n.title or 'Untitled' }}</div>
+      <div class="note-time">{{ n.time }}</div>
+    </div>
     <div class="note-body">{{ n.body }}</div>
-    <div class="note-actions">
-      <form method="get" action="/note/{{ n.id }}">
-        <button class="btn-small outline" type="submit">Edit</button>
-      </form>
-      <button class="btn-small outline"
-              onclick="confirmNoteDelete({{ n.id }})">Delete</button>
+    <div class="note-footer" onclick="event.stopPropagation()">
+      <a href="/note/{{ n.id }}" class="note-btn">Edit</a>
+      <button class="note-btn danger" onclick="confirmNoteDelete({{ n.id }})">Delete</button>
     </div>
   </div>
   {% endfor %}
@@ -54,13 +48,10 @@
   <div class="empty-state">
     <div class="empty-icon">📝</div>
     <div class="empty-title">No notes yet</div>
-    <div class="empty-sub">
-      {% if q %}No notes matched "{{ q }}".{% else %}Start writing something above.{% endif %}
-    </div>
+    <div class="empty-sub">{% if q %}No notes matched "{{ q }}".{% else %}Start writing something above.{% endif %}</div>
   </div>
 {% endif %}
 </div>
-
 </div>
 {% endblock %}
 
@@ -71,10 +62,8 @@ function confirmNoteDelete(noteId) {
   document.getElementById('confirmBody').textContent  = 'This cannot be undone.';
   document.getElementById('confirmYes').onclick = function () {
     var f = document.createElement('form');
-    f.method = 'post';
-    f.action = '/note/' + noteId + '/delete';
-    document.body.appendChild(f);
-    f.submit();
+    f.method = 'post'; f.action = '/note/' + noteId + '/delete';
+    document.body.appendChild(f); f.submit();
   };
   document.getElementById('confirmModal').style.display = 'flex';
 }

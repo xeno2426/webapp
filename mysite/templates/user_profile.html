@@ -3,29 +3,32 @@
 {% block content %}
 <div class="page-body">
 
-<h1>@{{ profile_user }}</h1>
+<div class="profile-hero">
+  <div class="avatar-upload-label" style="cursor:default;">
+    {% if avatar_url %}
+      <img src="{{ avatar_url }}" class="profile-avatar" alt="avatar">
+    {% else %}
+      <div class="profile-avatar-placeholder">{{ profile_user[0]|upper }}</div>
+    {% endif %}
+  </div>
+  <div class="profile-username">@{{ profile_user }}</div>
+  {% if bio %}<div class="profile-bio-preview">{{ bio }}</div>{% endif %}
+</div>
 
-{% if avatar_url %}
-  <img src="{{ avatar_url }}" class="avatar" alt="avatar">
-{% endif %}
-
-<p style="margin-top:8px;font-size:14px;">{{ bio or 'No bio yet.' }}</p>
-
-<div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;">
+<div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:8px;">
   {% if are_friends %}
-    <a href="/chat/{{ profile_user }}" class="btn" style="width:auto;padding:10px 20px;">💬 Message</a>
+    <a href="/chat/{{ profile_user }}" class="btn" style="width:auto;padding:10px 24px;">💬 Message</a>
   {% elif already_requested %}
-    <button class="btn-secondary" style="width:auto;padding:10px 20px;" disabled>Request Sent</button>
+    <button class="btn-secondary" style="width:auto;padding:10px 24px;" disabled>Request Sent</button>
   {% else %}
     <form method="post" action="/friends">
       <input type="hidden" name="action" value="add">
       <input type="hidden" name="friend_username" value="{{ profile_user }}">
-      <button class="btn" style="width:auto;padding:10px 20px;" type="submit">➕ Add Friend</button>
+      <button class="btn" style="width:auto;padding:10px 24px;" type="submit">➕ Add Friend</button>
     </form>
   {% endif %}
 </div>
 
-<p style="margin-top:16px;"><a href="/friends" class="link">← Back to Friends</a></p>
-
+<p style="margin-top:20px;text-align:center;"><a href="/friends" class="link">← Back</a></p>
 </div>
 {% endblock %}

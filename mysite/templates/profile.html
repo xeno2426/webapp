@@ -3,54 +3,69 @@
 {% block content %}
 <div class="page-body">
 
-<h1>Profile</h1>
-<p>Manage your profile, avatar and security.</p>
-
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 {% if info_msg %}<div class="info">{{ info_msg }}</div>{% endif %}
 
-{% if avatar_url %}
-  <img src="{{ avatar_url }}" class="avatar" alt="avatar">
-{% endif %}
+<div class="profile-hero">
+  <form method="post" enctype="multipart/form-data" id="avatarForm">
+    <input type="hidden" name="action" value="avatar">
+    <input type="file" name="avatar" id="avatarInput"
+           accept="image/png,image/jpeg,image/gif,image/webp"
+           style="display:none"
+           onchange="document.getElementById('avatarForm').submit()">
+    <label class="avatar-upload-label" for="avatarInput" title="Tap to change photo">
+      {% if avatar_url %}
+        <img src="{{ avatar_url }}" class="profile-avatar" alt="avatar">
+      {% else %}
+        <div class="profile-avatar-placeholder">{{ user[0]|upper if user else '?' }}</div>
+      {% endif %}
+      <div class="avatar-edit-overlay">📷</div>
+    </label>
+  </form>
+  <div class="profile-username">@{{ user }}</div>
+  {% if info.bio %}<div class="profile-bio-preview">{{ info.bio }}</div>{% endif %}
+</div>
 
-<form method="post" enctype="multipart/form-data">
-  <input type="hidden" name="action" value="avatar">
-  <input type="file" name="avatar" accept="image/png,image/jpeg,image/gif,image/webp">
-  <p style="font-size:11px;color:var(--text-dim);margin-top:-8px;">PNG / JPG / GIF / WEBP · max 5 MB</p>
-  <button class="btn2" type="submit">Upload avatar</button>
-</form>
+<div class="profile-section">
+  <h3>Bio</h3>
+  <form method="post">
+    <input type="hidden" name="action" value="update_bio">
+    <textarea name="bio" placeholder="Tell people about yourself…" maxlength="400"
+      oninput="document.getElementById('bioCount').textContent=this.value.length+'/400'">{{ info.bio or '' }}</textarea>
+    <p style="font-size:11px;color:var(--text-dim);text-align:right;margin-top:-8px;" id="bioCount">{{ bio_len }}/400</p>
+    <button class="btn" type="submit">Save bio</button>
+  </form>
+</div>
 
-<form method="post" style="margin-top:12px;">
-  <input type="hidden" name="action" value="update_bio">
-  <textarea name="bio" placeholder="Your bio…" maxlength="400"
-    oninput="document.getElementById('bioCount').textContent=this.value.length+'/400'">{{ info.bio or '' }}</textarea>
-  <p style="font-size:11px;color:var(--text-dim);text-align:right;margin-top:-8px;" id="bioCount">{{ bio_len }}/400</p>
-  <button class="btn2" type="submit">Save bio</button>
-</form>
+<div class="profile-section">
+  <h3>Recovery phrase</h3>
+  <form method="post">
+    <input type="hidden" name="action" value="update_recovery">
+    <input type="password" name="recovery" placeholder="New recovery phrase…" autocomplete="new-password">
+    <button class="btn" type="submit">Update phrase</button>
+  </form>
+</div>
 
-<form method="post" style="margin-top:12px;">
-  <input type="hidden" name="action" value="update_recovery">
-  <input name="recovery" placeholder="Recovery phrase" value="{{ info.recovery or '' }}">
-  <button class="btn2" type="submit">Save recovery phrase</button>
-</form>
+<div class="profile-section">
+  <h3>Change password</h3>
+  <form method="post">
+    <input type="hidden" name="action" value="change_password">
+    <input name="old_pw"  type="password" placeholder="Current password" required autocomplete="current-password">
+    <input name="new_pw"  type="password" placeholder="New password" required autocomplete="new-password">
+    <input name="new_pw2" type="password" placeholder="Confirm new password" required>
+    <button class="btn" type="submit">Change password</button>
+  </form>
+</div>
 
-<form method="post" style="margin-top:12px;">
-  <input type="hidden" name="action" value="change_password">
-  <input name="old_pw" type="password" placeholder="Old password" required>
-  <input name="new_pw" type="password" placeholder="New password" required>
-  <input name="new_pw2" type="password" placeholder="Confirm new password" required>
-  <button class="btn2" type="submit">Change password</button>
-</form>
-
-<hr>
-<p style="font-size:13px;font-weight:600;color:var(--danger);">Danger Zone</p>
-<p style="font-size:12px;color:var(--text-dim);">This permanently deletes your account, messages and data.</p>
-<form method="post" onsubmit="return confirm('Are you absolutely sure? This cannot be undone.');">
-  <input type="hidden" name="action" value="delete_account">
-  <input name="confirm_delete" placeholder="Type your username to confirm">
-  <button class="btn2" type="submit"
-          style="color:var(--danger);border-color:var(--danger);margin-top:6px;">Delete my account</button>
-</form>
-
+<div class="profile-section" style="border-color:rgba(239,68,68,0.3);">
+  <h3 style="color:var(--danger);">Danger zone</h3>
+  <p style="font-size:13px;color:var(--text-dim);margin-bottom:12px;">Permanently deletes your account and all data.</p>
+  <form method="post" onsubmit="return confirm('Are you absolutely sure? This cannot be undone.');">
+    <input type="hidden" name="action" value="delete_account">
+    <input name="confirm_delete" placeholder="Type your username to confirm">
+    <button class="btn" type="submit" style="background:var(--danger);margin-top:6px;">Delete my account</button>
+  </form>
+</div>
+<div style="height:24px;"></div>
 </div>
 {% endblock %}

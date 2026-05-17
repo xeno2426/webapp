@@ -3,41 +3,36 @@
 {% block content %}
 <div class="page-body">
 
-<h1>Groups</h1>
-<p>Your group chats.</p>
-
-<form action="/group/create" style="margin-bottom:16px;">
-  <button class="btn" type="submit">+ Create New Group</button>
-</form>
+<div class="page-header">
+  <div><h1>Groups</h1><p>Your group chats.</p></div>
+  <a href="/group/create" class="groups-header-btn">+ New</a>
+</div>
 
 {% if groups %}
   {% for g in groups %}
   <div class="friend-card">
-    <div style="display:flex;align-items:center;gap:8px;">
+    <div class="friend-avatar-wrap">
       {% if g.avatar %}
-        <img src="{{ g.avatar }}" class="group-avatar">
+        <img src="{{ g.avatar }}" class="friend-avatar" style="object-fit:cover;">
       {% else %}
-        <span style="width:24px;height:24px;border-radius:999px;background:var(--surface-3);
-                     display:inline-flex;align-items:center;justify-content:center;
-                     font-size:12px;">💬</span>
+        <div class="friend-avatar">{{ g.name[0]|upper }}</div>
       {% endif %}
-      <div>
-        <strong>{{ g.name }}</strong>
-        <small style="display:block;color:var(--text-dim);font-size:11px;">{{ g.member_count }} member{{ 's' if g.member_count != 1 }}</small>
-      </div>
     </div>
-    <form method="get" action="/group/{{ g.id }}">
-      <button class="btn-small" type="submit">Open</button>
-    </form>
+    <div class="friend-info">
+      <div class="friend-name">{{ g.name }}</div>
+      <div class="friend-last-seen">{{ g.member_count }} member{{ 's' if g.member_count != 1 }}</div>
+    </div>
+    <div class="friend-actions">
+      <a href="/group/{{ g.id }}" class="friend-action-btn">Open</a>
+    </div>
   </div>
   {% endfor %}
 {% else %}
   <div class="empty-state">
     <div class="empty-icon">💬</div>
     <div class="empty-title">No groups yet</div>
-    <div class="empty-sub">Create a group to start chatting with multiple friends at once.</div>
+    <div class="empty-sub">Create a group to chat with multiple friends at once.</div>
   </div>
 {% endif %}
-
 </div>
 {% endblock %}

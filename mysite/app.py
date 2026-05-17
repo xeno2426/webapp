@@ -713,12 +713,27 @@ def friends():
         fi        = friends_info.get(f) or {}
         last_seen = fi.get("last_seen")
         online    = False
+        last_seen_str = ""
         if last_seen:
             try:
                 ts     = last_seen if isinstance(last_seen, datetime) else datetime.strptime(str(last_seen), "%Y-%m-%d %H:%M:%S")
-                online = (utc_now() - ts) < timedelta(seconds=40)
+                if ts.tzinfo is None:
+                    from datetime import timezone as _tz
+                    ts = ts.replace(tzinfo=_tz.utc)
+                diff  = utc_now() - ts
+                secs  = int(diff.total_seconds())
+                online = secs < 90
+                if not online:
+                    if secs < 3600:
+                        last_seen_str = f"{secs // 60}m ago"
+                    elif secs < 86400:
+                        last_seen_str = f"{secs // 3600}h ago"
+                    else:
+                        last_seen_str = f"{secs // 86400}d ago"
             except Exception: pass
         friends_data.append({"username": f, "online": online,
+                              "last_seen_str": last_seen_str,
+                              "avatar": fi.get("avatar", ""),
                               "unread": unread_by_user.get(f, 0)})
 
     return render_template("friends.html", user=me,
