@@ -16,7 +16,15 @@ def _get_pool():
         )
     return _pool
 
-def get_conn():  return _get_pool().getconn()
+def get_conn():
+    try:
+        c = _get_pool().getconn()
+        c.isolation_level  # test connection alive
+        return c
+    except Exception:
+        global _pool
+        _pool = None
+        return _get_pool().getconn()
 def put_conn(c): _get_pool().putconn(c)
 
 def query(sql, params=(), one=False):

@@ -38,7 +38,7 @@ app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 
 # Fix 1.11 — restrict WebSocket CORS to our own domain only.
 # Fix 6.4 — async_mode matches the eventlet worker class in Procfile.
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading",
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="gevent",
                     logger=False, engineio_logger=False)
 
 # ── Speed: cache static files 7 days, never cache HTML pages ────
